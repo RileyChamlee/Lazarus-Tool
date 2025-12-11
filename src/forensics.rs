@@ -5,6 +5,8 @@ use std::process::Command;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH}; // Added imports for unique timestamps
 
 pub fn menu() {
     loop {
@@ -13,7 +15,7 @@ pub fn menu() {
 
         let choices = &[
             "1. Crash Detective (Analyze BSODs & App Crashes)",
-            "2. Large File Scout (Find Top Space Hogs)", // NEW
+            "2. Large File Scout (Find Top Space Hogs)",
             "3. Harvest WiFi Keys",
             "4. Audit Startup Items",
             "5. Get OEM Product Key",
@@ -46,21 +48,17 @@ pub fn menu() {
     }
 }
 
-// --- NEW FEATURE ---
+// --- FEATURES ---
 
 fn large_file_scout() {
     println!("{}", "\n[*] SCANNING FOR LARGE FILES (>500MB)...".cyan());
     println!("    (Scanning current user profile recursively. This may take a minute.)");
 
-    // We use a simple vector to hold results: (Size, Path)
     let mut large_files: Vec<(u64, String)> = Vec::new();
     let user_profile = std::env::var("USERPROFILE").unwrap_or("C:\\".to_string());
     let min_size = 500 * 1024 * 1024; // 500 MB
 
-    // Start recursion
     visit_dirs(Path::new(&user_profile), &mut large_files, min_size);
-
-    // Sort descending by size
     large_files.sort_by(|a, b| b.0.cmp(&a.0));
 
     if large_files.is_empty() {
@@ -70,7 +68,6 @@ fn large_file_scout() {
         println!("{}", "--------------------------------------------------".yellow());
         let mut log_content = String::from("LARGE FILES REPORT:\n");
         
-        // Take top 20
         for (size, path) in large_files.iter().take(20) {
             let size_mb = size / 1024 / 1024;
             let line = format!("{:<10} MB   {}", size_mb, path);
@@ -82,14 +79,12 @@ fn large_file_scout() {
     pause();
 }
 
-// Recursive helper (ignores errors/Access Denied)
 fn visit_dirs(dir: &Path, list: &mut Vec<(u64, String)>, min_size: u64) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries {
             if let Ok(entry) = entry {
                 let path = entry.path();
                 if path.is_dir() {
-                    // Don't recurse into AppData (too slow/locked) or hidden system folders
                     if !path.ends_with("AppData") && !path.ends_with("Application Data") {
                         visit_dirs(&path, list, min_size);
                     }
@@ -105,8 +100,6 @@ fn visit_dirs(dir: &Path, list: &mut Vec<(u64, String)>, min_size: u64) {
         }
     }
 }
-
-// --- EXISTING FEATURES ---
 
 fn analyze_crashes() {
     println!("{}", "\n[*] RUNNING CRASH DETECTIVE...".cyan());
@@ -197,15 +190,29 @@ fn dump_system_info() {
 // --- HELPER FUNCTIONS ---
 
 fn run_ps_script(name: &str, content: &str) {
-    let temp_path = format!("C:\\Windows\\Temp\\lazarus_{}.ps1", name);
-    let mut file = File::create(&temp_path).expect("Failed to create temp script");
-    file.write_all(content.as_bytes()).expect("Failed to write script");
+    // FIX: Generate a UNIQUE filename using timestamp to completely avoid file lock collisions
+    let start = SystemTime::now();
+    let since_epoch = start.duration_since(UNIX_EPOCH).expect("Time went backwards");
+    let timestamp = since_epoch.as_millis();
+    
+    let temp_path = format!("C:\\Windows\\Temp\\lazarus_{}_{}.ps1", name, timestamp);
+
+    // Write file and close it immediately
+    {
+        let mut file = File::create(&temp_path).expect("Failed to create temp script");
+        file.write_all(content.as_bytes()).expect("Failed to write script");
+    }
+
+    // Increased sleep to 250ms to let Antivirus release the new file
+    thread::sleep(Duration::from_millis(250));
 
     let mut child = Command::new("powershell")
         .args(&["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &temp_path])
         .spawn()
         .expect("Failed to launch PowerShell");
     let _ = child.wait();
+    
+    // Attempt cleanup, but don't crash if it fails (Windows might delete it later)
     let _ = std::fs::remove_file(&temp_path);
     pause();
 }

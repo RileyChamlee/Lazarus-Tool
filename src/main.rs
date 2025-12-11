@@ -13,7 +13,7 @@ fn main() {
         print!("\x1B[2J\x1B[1;1H");
 
         println!("{}", "=========================================".green().bold());
-        println!("{}", "       LAZARUS RECOVERY TOOL v2.5        ".green().bold());
+        println!("{}", "       LAZARUS RECOVERY TOOL v1.0.4       ".green().bold());
         println!("{}", "     Offline Repair & Forensics Unit     ".green());
         println!("{}", "=========================================".green().bold());
         println!();
