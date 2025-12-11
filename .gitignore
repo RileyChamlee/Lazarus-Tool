@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+*.pdb
+*.ps1
+!src/scripts/*.ps1
+Lazarus_Reports/
+.DS_Store
