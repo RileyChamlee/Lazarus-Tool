@@ -5,7 +5,7 @@ use std::env;
 use std::process::Command;
 
 // --- CONFIGURATION ---
-// CHANGE THIS to your GitHub Username
+// Ensure these match your repository exactly
 const GITHUB_USER: &str = "RileyChamlee"; 
 const GITHUB_REPO: &str = "Lazarus-Tool"; 
 
@@ -25,7 +25,9 @@ pub fn check_for_updates(current_version: &str) {
         }
     };
 
-    let json: serde_json::Value = match resp.into_json() {
+    // --- FIX IS HERE ---
+    // Instead of resp.into_json(), we use serde_json to read the stream directly.
+    let json: serde_json::Value = match serde_json::from_reader(resp.into_reader()) {
         Ok(j) => j,
         Err(_) => {
             println!("{}", "    [!] Failed to parse update data.".red());
