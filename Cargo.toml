@@ -1,6 +1,6 @@
 [package]
 name = "lazarus"
-version = "2.1.0"
+version = "1.0.0"
 edition = "2021"
 
 [dependencies]
@@ -9,5 +9,9 @@ run_script = "0.10"
 sysinfo = "0.29"
 chrono = "0.4"
 dialoguer = "0.10"
-# New dependency for Registry editing
 winreg = "0.10"
+ureq = "2.6"
+serde_json = "1.0"
+
+[build-dependencies]
+winres = "0.1"
