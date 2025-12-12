@@ -145,7 +145,7 @@ fn save_ip_log() {
     pause();
 }
 
-// --- 5. SNMP LOOKUP (FIXED) ---
+// --- 5. SNMP LOOKUP ---
 fn snmp_lookup() {
     println!("{}", "\n[*] SNMP OID LOOKUP TOOL".cyan());
     
@@ -176,10 +176,10 @@ fn snmp_lookup() {
     let timeout = Duration::from_secs(2);
     
     match SyncSession::new(&target, community.as_bytes(), Some(timeout), 0) {
+        // FIX: Changed 'Ok(response)' to 'Ok(mut response)'
         Ok(mut session) => {
             match session.get(&oid) {
-                Ok(response) => {
-                    // FIX: Removed .iter(), just use .next() directly
+                Ok(mut response) => { // <-- Also added 'mut' here just in case
                     if let Some((_oid, val)) = response.varbinds.next() {
                         println!("{}", "\n[SUCCESS] Response Received:".green().bold());
                         match val {
