@@ -16,7 +16,7 @@ pub fn menu() {
             "2. Network Nuke (Reset Stack)",
             "3. Connectivity Test (Ping Google/Cloudflare)",
             "4. Save IP Configuration to Log",
-            "5. SNMP OID Lookup",
+            "5. SNMP Walk (Discover OIDs)", // Renamed
             "Back",
         ];
 
@@ -32,10 +32,106 @@ pub fn menu() {
             1 => network_nuke(),
             2 => connectivity_test(),
             3 => save_ip_log(),
-            4 => snmp_lookup(),
+            4 => snmp_walk(), // Calls the new walker
             _ => break,
         }
     }
+}
+
+// --- 5. SNMP WALK (NEW: Discovers OIDs) ---
+fn snmp_walk() {
+    println!("{}", "\n[*] SNMP WALKER (DISCOVERY TOOL)".cyan());
+    println!("    (This will list all available OIDs starting from your root)");
+    
+    let target: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Target IP Address")
+        .default("127.0.0.1".to_string())
+        .interact_text()
+        .unwrap();
+
+    let community: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Community String")
+        .default("public".to_string())
+        .interact_text()
+        .unwrap();
+
+    // Default to 'system' branch, which is safe and usually exists
+    let root_oid_str: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Start Walking at OID (Default: System Info)")
+        .default("1.3.6.1.2.1.1".to_string()) 
+        .interact_text()
+        .unwrap();
+
+    let root_oid: Vec<u32> = root_oid_str.split('.')
+        .filter_map(|s| s.parse::<u32>().ok())
+        .collect();
+
+    println!("{}", format!("\n    Scanning {} starting at {}...", target, root_oid_str).yellow());
+    println!("{}", "    (Press Ctrl+C to stop if it goes on forever)\n".gray());
+
+    let timeout = Duration::from_secs(2);
+    
+    match SyncSession::new(&target, community.as_bytes(), Some(timeout), 0) {
+        Ok(mut session) => {
+            let mut current_oid = root_oid.clone();
+            let mut count = 0;
+
+            loop {
+                // GETNEXT is the magic command that finds the "next" OID for you
+                match session.getnext(&current_oid) {
+                    Ok(mut response) => {
+                        if let Some((next_oid, val)) = response.varbinds.next() {
+                            // Check if we have stepped outside the tree we wanted to scan
+                            if next_oid.len() < root_oid.len() || &next_oid[0..root_oid.len()] != &root_oid[..] {
+                                break;
+                            }
+
+                            // Print the Result
+                            let oid_string = next_oid.iter().map(|i| i.to_string()).collect::<Vec<String>>().join(".");
+                            
+                            match val {
+                                Value::OctetString(bytes) => {
+                                    // Try to print strings cleanly
+                                    let s = String::from_utf8_lossy(bytes);
+                                    // If it looks like garbage characters, print raw bytes
+                                    if s.chars().any(|c| c.is_control() && !c.is_whitespace()) {
+                                        println!("    {} = [Binary Data]", oid_string);
+                                    } else {
+                                        println!("    {} = {}", oid_string.green(), s);
+                                    }
+                                },
+                                Value::Integer(i) => println!("    {} = {} (Int)", oid_string.green(), i),
+                                Value::Counter32(c) => println!("    {} = {} (Counter)", oid_string.green(), c),
+                                Value::Timeticks(t) => println!("    {} = {} (Ticks)", oid_string.green(), t),
+                                _ => println!("    {} = {:?}", oid_string.green(), val),
+                            }
+
+                            // Update loop to look for the next one
+                            current_oid = next_oid;
+                            count += 1;
+
+                            // Safety break to prevent infinite loops on weird devices
+                            if count >= 100 {
+                                println!("{}", "    --- (Limit reached: 100 items) ---".yellow());
+                                break;
+                            }
+                        } else {
+                            break; // End of tree
+                        }
+                    },
+                    Err(_) => {
+                        println!("{}", "    [!] Scan ended (Timeout or End of MIB).".red());
+                        break;
+                    }
+                }
+            }
+            if count == 0 {
+                 println!("{}", "    [!] No OIDs found. (Check IP, Community String, or Firewall)".red());
+            }
+        },
+        Err(_) => println!("{}", "    [!] Could not create SNMP session.".red()),
+    }
+    pause();
 }
 
 // --- 1. SUBNET SCANNER ---
@@ -142,64 +238,6 @@ fn save_ip_log() {
     println!("{}", &content);
     logger::log_data("IP_Configuration", &content);
     println!("{}", "\n[+] Configuration saved to Lazarus_Reports folder.".green());
-    pause();
-}
-
-// --- 5. SNMP LOOKUP ---
-fn snmp_lookup() {
-    println!("{}", "\n[*] SNMP OID LOOKUP TOOL".cyan());
-    
-    let target: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Target IP Address")
-        .default("127.0.0.1".to_string())
-        .interact_text()
-        .unwrap();
-
-    let community: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Community String")
-        .default("public".to_string())
-        .interact_text()
-        .unwrap();
-
-    let oid_str: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("OID to Query (e.g., 1.3.6.1.2.1.1.1.0)")
-        .default("1.3.6.1.2.1.1.1.0".to_string())
-        .interact_text()
-        .unwrap();
-
-    let oid: Vec<u32> = oid_str.split('.')
-        .filter_map(|s| s.parse::<u32>().ok())
-        .collect();
-
-    println!("{}", format!("\n    Querying {} on {}...", oid_str, target).yellow());
-
-    let timeout = Duration::from_secs(2);
-    
-    match SyncSession::new(&target, community.as_bytes(), Some(timeout), 0) {
-        // FIX: Changed 'Ok(response)' to 'Ok(mut response)'
-        Ok(mut session) => {
-            match session.get(&oid) {
-                Ok(mut response) => { // <-- Also added 'mut' here just in case
-                    if let Some((_oid, val)) = response.varbinds.next() {
-                        println!("{}", "\n[SUCCESS] Response Received:".green().bold());
-                        match val {
-                            Value::OctetString(bytes) => {
-                                println!("    String: {}", String::from_utf8_lossy(bytes));
-                            },
-                            Value::Integer(i) => println!("    Integer: {}", i),
-                            Value::Counter32(c) => println!("    Counter32: {}", c),
-                            Value::Timeticks(t) => println!("    Timeticks: {}", t),
-                            _ => println!("    Value: {:?}", val),
-                        }
-                    } else {
-                        println!("{}", "    [!] No data returned.".red());
-                    }
-                },
-                Err(_) => println!("{}", "    [!] Request Timeout or Error.".red()),
-            }
-        },
-        Err(_) => println!("{}", "    [!] Could not create SNMP session.".red()),
-    }
     pause();
 }
 
