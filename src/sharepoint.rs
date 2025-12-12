@@ -1,16 +1,79 @@
 use crate::logger;
 use colored::*;
-use dialoguer::{Input, Confirm};
+use dialoguer::{Input, Confirm, Select, theme::ColorfulTheme};
 use std::fs;
 use std::path::Path;
 use std::time::Instant;
+use std::process::Command;
 
 pub fn menu() {
-    print!("\x1B[2J\x1B[1;1H");
-    println!("{}", "--- SHAREPOINT MIGRATION PRE-FLIGHT ---".cyan().bold());
+    loop {
+        print!("\x1B[2J\x1B[1;1H");
+        println!("{}", "--- SHAREPOINT & ONEDRIVE TOOLS ---".cyan().bold());
+
+        let choices = &[
+            "1. SharePoint Pre-Flight Scan (Bad Chars/Length)", // Restored
+            "2. OneDrive Nuclear Reset (Fix Sync Issues)",      // New
+            "3. Clear OneDrive Credentials",                    // New
+            "Back",
+        ];
+
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Select Action")
+            .default(0)
+            .items(&choices[..])
+            .interact()
+            .unwrap();
+
+        match selection {
+            0 => preflight_scan(),
+            1 => onedrive_nuclear_reset(),
+            2 => clear_creds(),
+            _ => break,
+        }
+    }
+}
+
+// --- NEW TOOLS ---
+
+fn onedrive_nuclear_reset() {
+    println!("{}", "\n[!] ONEDRIVE NUCLEAR RESET [!]".red().bold());
+    println!("    This will Kill OneDrive, Wipe Caches, and Force Re-sync.");
+    if !Confirm::with_theme(&ColorfulTheme::default()).with_prompt("Proceed?").interact().unwrap() { return; }
+
+    println!("{}", "[*] Killing OneDrive...".yellow());
+    let _ = Command::new("taskkill").args(&["/f", "/im", "onedrive.exe"]).output();
+    
+    let reset_cmd = r#"%localappdata%\Microsoft\OneDrive\onedrive.exe /reset"#;
+    println!("{}", "[*] Triggering /reset command...".yellow());
+    let _ = Command::new("cmd").args(&["/C", reset_cmd]).output();
+    
+    println!("{}", "[*] Waiting 15 seconds...".dimmed());
+    std::thread::sleep(std::time::Duration::from_secs(15));
+
+    println!("{}", "[*] Restarting OneDrive...".green());
+    let start_cmd = r#"%localappdata%\Microsoft\OneDrive\onedrive.exe"#;
+    let _ = Command::new("cmd").args(&["/C", start_cmd]).spawn();
+    
+    println!("{}", "\n[DONE] OneDrive reset. It may take a minute to reappear.".green());
+    pause();
+}
+
+fn clear_creds() {
+    println!("{}", "\n[*] CLEARING CREDENTIAL MANAGER (OneDrive)...".cyan());
+    let script = "cmdkey /list | Select-String 'OneDrive' -Context 0,1 | ForEach-Object { cmdkey /delete:($_ -replace 'Target: ','') }";
+    let _ = Command::new("powershell").args(&["-Command", script]).output();
+    println!("{}", "[DONE] Cached credentials removed.".green());
+    pause();
+}
+
+// --- RESTORED TOOL ---
+
+fn preflight_scan() {
+    println!("{}", "\n[*] SHAREPOINT MIGRATION SCANNER...".cyan());
 
     // 1. Get Source Path
-    let path_str: String = Input::new()
+    let path_str: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("Enter path to scan (e.g., X:\\Data)")
         .interact_text()
         .unwrap();
@@ -23,13 +86,13 @@ pub fn menu() {
     }
 
     // 2. Options
-    let auto_rename = Confirm::new()
+    let auto_rename = Confirm::with_theme(&ColorfulTheme::default())
         .with_prompt("Auto-rename illegal characters? (Replaces # % & with _)")
         .default(false)
         .interact()
         .unwrap();
 
-    println!("{}", "\n[*] STARTING SCAN... (This may take time for large drives)".yellow());
+    println!("{}", "\n[*] STARTING SCAN... (This may take time)".yellow());
     let start = Instant::now();
 
     let mut issues = Vec::new();
@@ -79,19 +142,16 @@ fn scan_dir(dir: &Path, issues: &mut Vec<(String, String)>, count: &mut u64, ren
                 let path_str = path.to_string_lossy().to_string();
                 *count += 1;
 
-                // 1. Check Path Length (> 400 is the hard limit, usually 256 is safe zone)
+                // 1. Check Path Length
                 if path_str.len() > 390 {
                     issues.push(("LENGTH".to_string(), path_str.clone()));
                 }
 
                 // 2. Check Illegal Chars
-                // SharePoint blocks: " * : < > ? / \ | # %
-                // Windows blocks most, but # and % are valid in Windows but BAD in SharePoint
                 if let Some(filename) = path.file_name() {
                     let fname = filename.to_string_lossy();
                     if fname.contains('#') || fname.contains('%') {
                         if rename {
-                            // Rename Logic
                             let new_name = fname.replace("#", "_").replace("%", "_");
                             let new_path = path.with_file_name(&new_name);
                             match fs::rename(&path, &new_path) {

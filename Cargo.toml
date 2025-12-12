@@ -1,6 +1,6 @@
 [package]
 name = "lazarus"
-version = "2.1.1"
+version = "3.0.0"
 edition = "2021"
 
 [dependencies]
@@ -13,8 +13,9 @@ winreg = "0.10"
 ureq = "2.6"
 serde_json = "1.0"
 snmp = "0.2"
-sha2 = "0.10"     # <--- Required for Duplicate Destroyer
-hex = "0.4"       # <--- Required for Duplicate Destroyer
+sha2 = "0.10"     # For Duplicate Destroyer
+hex = "0.4"       # For Duplicate Destroyer
+regex = "1.10"    # For BSOD Analyzer & PII Hunter
 
 [dependencies.windows]
 version = "0.48"

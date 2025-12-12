@@ -7,10 +7,9 @@ mod forensics;
 mod logger;
 mod domain;
 mod sharepoint;
-mod update; // <--- MAKE SURE THIS IS HERE
+mod update;
 
-// This version number MUST match Cargo.toml for updates to work correctly
-const VERSION: &str = "2.1.1"; 
+const VERSION: &str = "3.0.0"; 
 
 fn main() {
     loop {
@@ -28,7 +27,7 @@ fn main() {
             "3. Domain & Identity (Trust, GPO)",
             "4. Forensics (USB, Startup, Logs)",
             "5. SharePoint Pre-Flight Scan",
-            "6. Check for Updates", // <--- THE BUTTON
+            "6. Check for Updates", 
             "Exit",
         ];
 
@@ -45,7 +44,7 @@ fn main() {
             2 => domain::menu(),
             3 => forensics::menu(),
             4 => sharepoint::menu(),
-            5 => update::check_for_updates(VERSION), // <--- THE TRIGGER
+            5 => update::check_for_updates(VERSION),
             _ => {
                 println!("{}", "Exiting Lazarus...".red());
                 break;

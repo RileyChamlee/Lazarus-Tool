@@ -1,28 +1,31 @@
 use crate::logger;
 use colored::*;
-use dialoguer::{Select, theme::ColorfulTheme};
+use dialoguer::{Select, Input, theme::ColorfulTheme};
 use std::process::Command;
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{Write, BufReader, BufRead};
 use std::path::Path;
+use winreg::enums::*;
+use winreg::RegKey;
+use regex::Regex;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH}; // Added imports for unique timestamps
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub fn menu() {
     loop {
         print!("\x1B[2J\x1B[1;1H");
-        println!("{}", "--- FORENSICS & INFO ---".cyan().bold());
+        println!("{}", "--- FORENSICS & ANALYSIS ---".cyan().bold());
 
         let choices = &[
-            "1. Crash Detective (Analyze BSODs & App Crashes)",
-            "2. Large File Scout (Find Top Space Hogs)",
-            "3. Harvest WiFi Keys",
+            "1. BSOD Analyzer Pro (Crash Logs)",
+            "2. USB History Viewer (Registry Audit)",
+            "3. Large File Scout (>500MB)",
             "4. Audit Startup Items",
             "5. Get OEM Product Key",
             "6. Export Recent System Errors",
-            "7. USB History",
-            "8. User Audit",
-            "9. Dump Full System Info",
+            "7. User Audit (Local Accounts)",
+            "8. Dump Full System Info",
+            "9. PII Hunter (Scan for SSN/Credit Cards)", // <--- NEW TOOL
             "Back",
         ];
 
@@ -34,65 +37,83 @@ pub fn menu() {
             .unwrap();
 
         match selection {
-            0 => analyze_crashes(),
-            1 => large_file_scout(),
-            2 => harvest_wifi(),
+            0 => bsod_analyzer(),
+            1 => usb_history_viewer(),
+            2 => large_file_scout(),
             3 => startup_audit(),
             4 => get_oem_key(),
             5 => export_event_logs(),
-            6 => usb_history(),
-            7 => user_audit(),
-            8 => dump_system_info(),
+            6 => user_audit(),
+            7 => dump_system_info(),
+            8 => pii_hunter(), // <--- NEW CALL
             _ => break,
         }
     }
 }
 
-// --- FEATURES ---
+// --- 9. PII HUNTER (COMPLIANCE SCANNER) ---
+fn pii_hunter() {
+    println!("{}", "\n[*] PII HUNTER (SENSITIVE DATA SCANNER)...".cyan());
+    println!("    (Scans text files for SSN: xxx-xx-xxxx and CC: xxxx-xxxx-xxxx-xxxx)");
+    
+    let path_str: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Enter directory to scan (e.g., C:\\Users)")
+        .interact_text()
+        .unwrap();
 
-fn large_file_scout() {
-    println!("{}", "\n[*] SCANNING FOR LARGE FILES (>500MB)...".cyan());
-    println!("    (Scanning current user profile recursively. This may take a minute.)");
+    let root = Path::new(&path_str);
+    if !root.exists() {
+        println!("{}", "    [!] Directory not found.".red());
+        pause();
+        return;
+    }
 
-    let mut large_files: Vec<(u64, String)> = Vec::new();
-    let user_profile = std::env::var("USERPROFILE").unwrap_or("C:\\".to_string());
-    let min_size = 500 * 1024 * 1024; // 500 MB
+    println!("{}", "    Scanning files... (This may take a while)".yellow());
+    let mut pii_hits = Vec::new();
+    let ssn_regex = Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap();
+    let cc_regex = Regex::new(r"\b\d{4}-\d{4}-\d{4}-\d{4}\b").unwrap();
 
-    visit_dirs(Path::new(&user_profile), &mut large_files, min_size);
-    large_files.sort_by(|a, b| b.0.cmp(&a.0));
+    scan_pii_recursive(root, &ssn_regex, &cc_regex, &mut pii_hits);
 
-    if large_files.is_empty() {
-        println!("{}", "    [+] No files larger than 500MB found.".green());
+    if pii_hits.is_empty() {
+        println!("{}", "\n[+] No PII found in text files.".green());
     } else {
-        println!("\n{:<15} {}", "SIZE", "PATH");
-        println!("{}", "--------------------------------------------------".yellow());
-        let mut log_content = String::from("LARGE FILES REPORT:\n");
+        println!("\n[!] POTENTIAL PII FOUND:", );
+        println!("{}", "----------------------------------------".red());
+        let mut report = String::from("PII SCAN REPORT\n");
         
-        for (size, path) in large_files.iter().take(20) {
-            let size_mb = size / 1024 / 1024;
-            let line = format!("{:<10} MB   {}", size_mb, path);
-            println!("{}", line);
-            log_content.push_str(&format!("{}\n", line));
+        for (file, pii_type) in pii_hits {
+            println!("[{}] {}", pii_type.red(), file);
+            report.push_str(&format!("{} found in {}\n", pii_type, file));
         }
-        logger::log_data("Large_Files", &log_content);
+        logger::log_data("PII_Scan", &report);
     }
     pause();
 }
 
-fn visit_dirs(dir: &Path, list: &mut Vec<(u64, String)>, min_size: u64) {
+fn scan_pii_recursive(dir: &Path, ssn_re: &Regex, cc_re: &Regex, hits: &mut Vec<(String, String)>) {
     if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if path.is_dir() {
-                    if !path.ends_with("AppData") && !path.ends_with("Application Data") {
-                        visit_dirs(&path, list, min_size);
-                    }
-                } else {
-                    if let Ok(metadata) = entry.metadata() {
-                        let len = metadata.len();
-                        if len > min_size {
-                            list.push((len, path.to_string_lossy().to_string()));
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_pii_recursive(&path, ssn_re, cc_re, hits);
+            } else {
+                // Only scan text-like extensions to avoid reading massive binaries
+                if let Some(ext) = path.extension() {
+                    let ext_str = ext.to_string_lossy().to_lowercase();
+                    if matches!(ext_str.as_str(), "txt" | "csv" | "log" | "xml" | "json" | "md" | "ini") {
+                        if let Ok(file) = File::open(&path) {
+                            let reader = BufReader::new(file);
+                            for line in reader.lines().flatten() {
+                                if ssn_re.is_match(&line) {
+                                    hits.push((path.to_string_lossy().to_string(), "SSN".to_string()));
+                                    break; // Stop scanning this file if hit found
+                                }
+                                if cc_re.is_match(&line) {
+                                    hits.push((path.to_string_lossy().to_string(), "CreditCard".to_string()));
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
@@ -101,22 +122,80 @@ fn visit_dirs(dir: &Path, list: &mut Vec<(u64, String)>, min_size: u64) {
     }
 }
 
-fn analyze_crashes() {
-    println!("{}", "\n[*] RUNNING CRASH DETECTIVE...".cyan());
-    let script = include_str!("scripts/crash_audit.ps1");
-    run_ps_script("crash_audit", script);
+// --- EXISTING TOOLS ---
+
+fn usb_history_viewer() {
+    println!("{}", "\n[*] SCANNING USB ARTIFACTS...".cyan());
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let usb_key = match hklm.open_subkey("SYSTEM\\CurrentControlSet\\Enum\\USBSTOR") {
+        Ok(k) => k,
+        Err(_) => { println!("{}", "    [!] Access Denied to Registry.".red()); pause(); return; }
+    };
+    println!("{:<30} | {}", "DEVICE NAME", "SERIAL / ID");
+    println!("{}", "---------------------------------------------------------".blue());
+    for name in usb_key.enum_keys().map(|x| x.unwrap()) {
+        let clean = name.replace("Disk&Ven_", "").replace("&Prod_", " ");
+        println!("{:<30} | {}", clean.green(), "Found in Registry");
+    }
+    pause();
+}
+
+fn bsod_analyzer() {
+    println!("{}", "\n[*] ANALYZING SYSTEM CRASHES (BSOD)...".cyan());
+    let ps_cmd_bugcheck = "Get-WinEvent -FilterHashtable @{LogName='System'; EventID=1001} -MaxEvents 10 -ErrorAction SilentlyContinue | Select-Object TimeCreated, Message | Out-String -Width 300";
+    let output = Command::new("powershell").args(&["-NoProfile", "-Command", ps_cmd_bugcheck]).output().expect("Failed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    
+    if stdout.trim().is_empty() { println!("{}", "\n[+] No recent BSODs found.".green()); } 
+    else {
+        println!("{}", "\n[!] CRASHES DETECTED:".red().bold());
+        let re = Regex::new(r"(0x[0-9a-fA-F]{8})").unwrap();
+        for line in stdout.lines() {
+            if line.trim().is_empty() || line.contains("TimeCreated") || line.contains("---") { continue; }
+            println!("{}", "--------------------------------------------------".dimmed());
+            println!("{}", line.trim());
+            if let Some(caps) = re.captures(line) {
+                println!("    -> BugCheck Code: {}", caps.get(1).unwrap().as_str().red().bold());
+            }
+        }
+    }
+    pause();
+}
+
+fn large_file_scout() {
+    println!("{}", "\n[*] SCANNING FOR LARGE FILES (>500MB)...".cyan());
+    let mut large_files: Vec<(u64, String)> = Vec::new();
+    let user_profile = std::env::var("USERPROFILE").unwrap_or("C:\\".to_string());
+    visit_dirs(Path::new(&user_profile), &mut large_files, 500 * 1024 * 1024);
+    large_files.sort_by(|a, b| b.0.cmp(&a.0));
+
+    if large_files.is_empty() { println!("{}", "    [+] No files larger than 500MB found.".green()); } 
+    else {
+        println!("\n{:<15} {}", "SIZE", "PATH");
+        println!("{}", "--------------------------------------------------".yellow());
+        for (size, path) in large_files.iter().take(20) {
+            println!("{:<10} MB   {}", size / 1024 / 1024, path);
+        }
+    }
+    pause();
+}
+
+fn visit_dirs(dir: &Path, list: &mut Vec<(u64, String)>, min_size: u64) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if !path.ends_with("AppData") { visit_dirs(&path, list, min_size); }
+            } else if let Ok(meta) = path.metadata() {
+                if meta.len() > min_size { list.push((meta.len(), path.to_string_lossy().to_string())); }
+            }
+        }
+    }
 }
 
 fn startup_audit() {
     println!("{}", "\n[*] SCANNING STARTUP ITEMS...".cyan());
-    let ps_cmd = r#"
-    Write-Output "--- REGISTRY RUN KEYS (HKCU) ---"
-    Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Run | Select-Object -Property * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider | Format-List
-    Write-Output "--- REGISTRY RUN KEYS (HKLM) ---"
-    Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Run | Select-Object -Property * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider | Format-List
-    Write-Output "--- STARTUP FOLDER ITEMS ---"
-    Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup" | Select-Object Name, FullName
-    "#;
+    let ps_cmd = "Get-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run | Select-Object -Property * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider | Format-List";
     run_ps_output("Startup_Audit", ps_cmd);
 }
 
@@ -125,11 +204,7 @@ fn get_oem_key() {
     let output = Command::new("wmic").args(&["path", "softwarelicensingservice", "get", "OA3xOriginalProductKey"]).output().expect("Failed");
     let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let key = result.lines().last().unwrap_or("Not Found").trim();
-    if key.is_empty() { println!("{}", "[!] No OEM Key found.".yellow()); } 
-    else { 
-        println!("{}", format!("\nOEM LICENSE KEY: {}", key).green().bold());
-        logger::log_data("OEM_Key", &format!("Product Key: {}", key));
-    }
+    println!("{}", format!("\nOEM LICENSE KEY: {}", key).green().bold());
     pause();
 }
 
@@ -139,81 +214,16 @@ fn export_event_logs() {
     run_ps_output("Event_Log_Dump", ps_cmd);
 }
 
-fn harvest_wifi() {
-    println!("{}", "\n[*] HUNTING FOR WIFI KEYS...".cyan());
-    let output = Command::new("netsh").args(&["wlan", "show", "profiles"]).output().expect("Failed");
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    let mut profiles = Vec::new();
-    for line in output_str.lines() {
-        if line.contains("All User Profile") {
-            if let Some(ssid) = line.split(':').nth(1) { profiles.push(ssid.trim().to_string()); }
-        }
-    }
-    if profiles.is_empty() { println!("{}", "[!] No profiles found.".red()); pause(); return; }
-    
-    let mut full_report = String::new();
-    full_report.push_str("WIFI HARVEST REPORT\n===================\n");
-    for ssid in profiles {
-        print!("    Extracting: {} ... ", ssid);
-        let key_output = Command::new("netsh").args(&["wlan", "show", "profile", &format!("name={}", ssid), "key=clear"]).output();
-        if let Ok(o) = key_output {
-            let text = String::from_utf8_lossy(&o.stdout);
-            let password = text.lines().find(|l| l.contains("Key Content")).map(|l| l.split(':').nth(1).unwrap_or(" (None)").trim()).unwrap_or("(Open/None)");
-            println!("{}", "OK".green());
-            full_report.push_str(&format!("SSID: {}\nPASS: {}\n\n", ssid, password));
-        } else { println!("{}", "FAILED".red()); }
-    }
-    logger::log_data("Wifi_Keys", &full_report);
-    pause();
-}
-
-fn usb_history() {
-    println!("{}", "\n[*] SCANNING USB ARTIFACTS...".cyan());
-    let ps_cmd = r#"Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Enum\USBSTOR\*\*' | Select-Object FriendlyName, @{N='ConnectedTime';E={$_.LastWriteTime}} | Sort-Object ConnectedTime -Descending | Format-Table -AutoSize"#;
-    run_ps_output("USB_History", ps_cmd);
-}
-
 fn user_audit() {
     println!("{}", "\n[*] AUDITING LOCAL ACCOUNTS...".cyan());
-    let ps_cmd = "Get-LocalUser | Select-Object Name, Enabled, LastLogon, Description | Format-Table -AutoSize; Write-Output \"`n--- ADMINS ---\"; Get-LocalGroupMember -Group 'Administrators' | Select-Object Name, PrincipalSource";
+    let ps_cmd = "Get-LocalUser | Select-Object Name, Enabled, LastLogon, Description | Format-Table -AutoSize";
     run_ps_output("User_Audit", ps_cmd);
 }
 
 fn dump_system_info() {
     println!("{}", "\n[*] Running 'systeminfo'...".cyan());
     let output = Command::new("systeminfo").output().expect("Failed");
-    let result = String::from_utf8_lossy(&output.stdout).to_string();
-    logger::log_data("System_Audit", &result);
-    pause();
-}
-
-// --- HELPER FUNCTIONS ---
-
-fn run_ps_script(name: &str, content: &str) {
-    // FIX: Generate a UNIQUE filename using timestamp to completely avoid file lock collisions
-    let start = SystemTime::now();
-    let since_epoch = start.duration_since(UNIX_EPOCH).expect("Time went backwards");
-    let timestamp = since_epoch.as_millis();
-    
-    let temp_path = format!("C:\\Windows\\Temp\\lazarus_{}_{}.ps1", name, timestamp);
-
-    // Write file and close it immediately
-    {
-        let mut file = File::create(&temp_path).expect("Failed to create temp script");
-        file.write_all(content.as_bytes()).expect("Failed to write script");
-    }
-
-    // Increased sleep to 250ms to let Antivirus release the new file
-    thread::sleep(Duration::from_millis(250));
-
-    let mut child = Command::new("powershell")
-        .args(&["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &temp_path])
-        .spawn()
-        .expect("Failed to launch PowerShell");
-    let _ = child.wait();
-    
-    // Attempt cleanup, but don't crash if it fails (Windows might delete it later)
-    let _ = std::fs::remove_file(&temp_path);
+    println!("{}", String::from_utf8_lossy(&output.stdout));
     pause();
 }
 

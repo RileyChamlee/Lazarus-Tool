@@ -5,6 +5,7 @@ use std::process::Command;
 use std::time::Duration;
 use std::thread;
 use std::sync::mpsc;
+use std::fs;
 use snmp::{SyncSession, Value};
 
 pub fn menu() {
@@ -13,11 +14,12 @@ pub fn menu() {
         println!("{}", "--- NETWORK TOOLS ---".cyan().bold());
 
         let choices = &[
-            "1. Subnet Fingerprinter (IP + MAC + Vendor)",
-            "2. Network Nuke (Reset Stack)",
-            "3. Connectivity Test (Ping Google/Cloudflare)",
-            "4. Save IP Configuration to Log",
-            "5. SNMP Walk (Discover OIDs)",
+            "1. Subnet Fingerprinter (IP + MAC + Vendor)", // Upgraded
+            "2. Wi-Fi Operations (Clone/Import/Export)", // NEW
+            "3. Network Nuke (Reset Stack)",
+            "4. Connectivity Test (Ping Google/Cloudflare)",
+            "5. Save IP Configuration to Log",
+            "6. SNMP Walk (Discover OIDs)",
             "Back",
         ];
 
@@ -30,16 +32,97 @@ pub fn menu() {
 
         match selection {
             0 => subnet_fingerprinter(),
-            1 => network_nuke(),
-            2 => connectivity_test(),
-            3 => save_ip_log(),
-            4 => snmp_walk(),
+            1 => wifi_menu(),
+            2 => network_nuke(),
+            3 => connectivity_test(),
+            4 => save_ip_log(),
+            5 => snmp_walk(),
             _ => break,
         }
     }
 }
 
-// --- 1. SUBNET FINGERPRINTER ---
+fn wifi_menu() {
+    loop {
+        let choices = &[
+            "1. Show Current Wi-Fi Password (Harvest)",
+            "2. Export All Profiles (Migration)",
+            "3. Import Profiles from Folder",
+            "Back"
+        ];
+        
+        let sel = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("WI-FI OPERATIONS")
+            .items(&choices[..])
+            .interact()
+            .unwrap();
+            
+        match sel {
+            0 => wifi_show_current_password(),
+            1 => wifi_export_profiles(),
+            2 => wifi_import_profiles(),
+            _ => break,
+        }
+    }
+}
+
+fn wifi_show_current_password() {
+    println!("{}", "\n[*] RETRIEVING WI-FI KEYS...".cyan());
+    let cmd = "netsh wlan show profile name=* key=clear";
+    let output = Command::new("cmd").args(&["/C", cmd]).output().expect("Failed");
+    println!("{}", String::from_utf8_lossy(&output.stdout));
+    pause();
+}
+
+fn wifi_export_profiles() {
+    println!("{}", "\n[*] EXPORTING WI-FI PROFILES...".cyan());
+    let path: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Export Destination Folder")
+        .default("C:\\Lazarus_WiFi_Backup".to_string())
+        .interact_text()
+        .unwrap();
+
+    let _ = fs::create_dir_all(&path);
+    
+    let status = Command::new("netsh")
+        .args(&["wlan", "export", "profile", &format!("folder={}", path), "key=clear"])
+        .status();
+
+    if status.is_ok() {
+        println!("{}", format!("[SUCCESS] Profiles saved to {}", path).green());
+    } else {
+        println!("{}", "[FAIL] Could not export profiles.".red());
+    }
+    pause();
+}
+
+fn wifi_import_profiles() {
+    println!("{}", "\n[*] IMPORTING WI-FI PROFILES...".cyan());
+    let path_str: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Source Folder containing XML files")
+        .interact_text()
+        .unwrap();
+        
+    let path = std::path::Path::new(&path_str);
+    if !path.exists() { println!("{}", "    [!] Folder not found.".red()); pause(); return; }
+
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if let Some(ext) = p.extension() {
+                if ext == "xml" {
+                    print!("    Importing {:?}... ", p.file_name().unwrap());
+                    let _ = Command::new("netsh")
+                        .args(&["wlan", "add", "profile", &format!("filename={:?}", p)])
+                        .output();
+                    println!("{}", "DONE".green());
+                }
+            }
+        }
+    }
+    pause();
+}
+
 fn subnet_fingerprinter() {
     println!("{}", "\n[*] STARTING ASSET SCANNER...".cyan());
     
@@ -146,7 +229,6 @@ fn lookup_vendor(mac: &str) -> String {
     }
 }
 
-// --- 2. NETWORK NUKE ---
 fn network_nuke() {
     println!("{}", "\n[*] INITIATING NETWORK NUKE...".red().bold());
     let cmds = ["netsh winsock reset", "netsh int ip reset", "ipconfig /release", "ipconfig /renew", "ipconfig /flushdns"];
@@ -159,7 +241,6 @@ fn network_nuke() {
     pause();
 }
 
-// --- 3. CONNECTIVITY TEST ---
 fn connectivity_test() {
     println!("{}", "\n[*] RUNNING CONNECTIVITY TEST...".cyan());
     let targets = [("8.8.8.8", "Google DNS"), ("1.1.1.1", "Cloudflare DNS")];
@@ -175,7 +256,6 @@ fn connectivity_test() {
     pause();
 }
 
-// --- 4. SAVE IP CONFIG ---
 fn save_ip_log() {
     println!("{}", "\n[*] SAVING IP CONFIGURATION...".cyan());
     let output = Command::new("ipconfig").arg("/all").output().expect("Failed");
@@ -186,14 +266,30 @@ fn save_ip_log() {
     pause();
 }
 
-// --- 5. SNMP WALK ---
 fn snmp_walk() {
     println!("{}", "\n[*] SNMP WALKER (DISCOVERY TOOL)".cyan());
     
-    let target: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Target IP Address").default("127.0.0.1".to_string()).interact_text().unwrap();
-    let community: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Community String").default("public".to_string()).interact_text().unwrap();
-    let root_oid_str: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Start Walking at OID").default("1.3.6.1.2.1.1".to_string()).interact_text().unwrap();
-    let root_oid: Vec<u32> = root_oid_str.split('.').filter_map(|s| s.parse::<u32>().ok()).collect();
+    let target: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Target IP Address")
+        .default("127.0.0.1".to_string())
+        .interact_text()
+        .unwrap();
+
+    let community: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Community String")
+        .default("public".to_string())
+        .interact_text()
+        .unwrap();
+
+    let root_oid_str: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Start Walking at OID")
+        .default("1.3.6.1.2.1.1".to_string()) 
+        .interact_text()
+        .unwrap();
+
+    let root_oid: Vec<u32> = root_oid_str.split('.')
+        .filter_map(|s| s.parse::<u32>().ok())
+        .collect();
 
     println!("{}", format!("\n    Scanning {} starting at {}...", target, root_oid_str).yellow());
     println!("{}", "    (Press Ctrl+C to stop if it goes on forever)\n".dimmed());
@@ -204,6 +300,7 @@ fn snmp_walk() {
         Ok(mut session) => {
             let mut current_oid = root_oid.clone();
             let mut count = 0;
+
             loop {
                 match session.getnext(&current_oid) {
                     Ok(mut response) => {
@@ -225,7 +322,10 @@ fn snmp_walk() {
                             }
                             current_oid = next_oid_string.split('.').filter_map(|s| s.parse::<u32>().ok()).collect();
                             count += 1;
-                            if count >= 100 { println!("{}", "    --- (Limit reached) ---".yellow()); break; }
+                            if count >= 100 { 
+                                println!("{}", "    --- (Limit reached) ---".yellow()); 
+                                break; 
+                            }
                         } else { break; }
                     },
                     Err(_) => break,

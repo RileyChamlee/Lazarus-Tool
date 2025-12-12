@@ -1,4 +1,4 @@
-use crate::logger; // Kept as you requested, just ignore the warning if it pops up
+use crate::logger;
 use colored::*;
 use dialoguer::{Select, Input, Confirm, theme::ColorfulTheme};
 use std::process::Command;
@@ -10,7 +10,7 @@ use winreg::enums::*;
 use winreg::RegKey;
 use sha2::{Sha256, Digest}; 
 
-// FIX: Updated imports for Windows 0.48 crate compatibility
+// WINDOWS API IMPORTS
 use windows::core::{PWSTR, PCWSTR};
 use windows::Win32::System::RestartManager::*;
 use std::ffi::OsStr;
@@ -40,6 +40,8 @@ pub fn menu() {
             "16. Rogue Admin Hunter (Scan/Demote Admins)",
             "17. File Locksmith (Unlock/Kill Processes)", 
             "18. Duplicate File Destroyer (Find & Delete)",
+            "19. UWP App Surgeon (Fix Calc/Photos/Store)",
+            "20. Driver Teleporter (Backup/Restore Drivers)", // <--- NEW TOOL
             "Back",
         ];
 
@@ -69,12 +71,71 @@ pub fn menu() {
             15 => rogue_admin_hunter(),
             16 => file_locksmith(),
             17 => duplicate_file_destroyer(),
+            18 => uwp_app_surgeon(),
+            19 => driver_teleporter(),
             _ => break,
         }
     }
 }
 
-// --- 17. FILE LOCKSMITH (FIXED) ---
+// --- 20. DRIVER TELEPORTER (NEW) ---
+fn driver_teleporter() {
+    println!("{}", "\n[*] DRIVER TELEPORTER (MIGRATION TOOL)...".cyan());
+    let choices = &["1. Export All Drivers (Backup)", "2. Import Drivers (Restore)", "Back"];
+    
+    let sel = Select::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select Mode")
+        .items(&choices[..])
+        .interact()
+        .unwrap();
+
+    match sel {
+        0 => {
+            let path: String = Input::with_theme(&ColorfulTheme::default())
+                .with_prompt("Export Destination Folder")
+                .default("C:\\Lazarus_Drivers".to_string())
+                .interact_text()
+                .unwrap();
+            
+            println!("{}", format!("    Exporting drivers to {}... (This takes a while)", path).yellow());
+            let _ = fs::create_dir_all(&path);
+            
+            // pnputil /export-driver * "C:\Path"
+            let status = Command::new("pnputil")
+                .args(&["/export-driver", "*", &path])
+                .status();
+
+            if status.is_ok() { println!("{}", "[SUCCESS] Drivers exported.".green()); }
+            else { println!("{}", "[FAIL] Export failed.".red()); }
+        },
+        1 => {
+            let path: String = Input::with_theme(&ColorfulTheme::default())
+                .with_prompt("Source Folder (containing .inf files)")
+                .interact_text()
+                .unwrap();
+            
+            if !Path::new(&path).exists() {
+                println!("{}", "    [!] Folder not found.".red());
+                pause();
+                return;
+            }
+
+            println!("{}", "    Installing drivers...".yellow());
+            // pnputil /add-driver "C:\Path\*.inf" /subdirs /install
+            let status = Command::new("pnputil")
+                .args(&["/add-driver", &format!("{}\\*.inf", path), "/subdirs", "/install"])
+                .status();
+
+            if status.is_ok() { println!("{}", "[SUCCESS] Drivers installed.".green()); }
+            else { println!("{}", "[FAIL] Import failed.".red()); }
+        },
+        _ => return,
+    }
+    pause();
+}
+
+// --- PREVIOUS V3.0 FEATURES (LOCKSMITH, ETC) ---
+
 fn file_locksmith() {
     println!("{}", "\n[*] FILE LOCKSMITH (UNLOCKER)...".cyan());
     
@@ -108,28 +169,22 @@ fn file_locksmith() {
     pause();
 }
 
-// FIX: Updated to match Windows 0.48 function signatures
 unsafe fn get_locking_processes(file_path: &str) -> Result<Vec<(u32, String)>, windows::core::Error> {
     let mut session_handle: u32 = 0;
     let mut session_key: [u16; 64] = [0; 64]; 
 
-    // Start Session
     let _ = RmStartSession(&mut session_handle, 0, PWSTR(session_key.as_mut_ptr()));
 
-    // Register Resources (Strict Type Casting for 0.48)
     let wide_path: Vec<u16> = OsStr::new(file_path).encode_wide().chain(Some(0)).collect();
     let pcwstr = PCWSTR(wide_path.as_ptr());
     let resources = [pcwstr];
-    // Pass 'Some(&resources)' instead of raw pointers
     let _ = RmRegisterResources(session_handle, Some(&resources), None, None);
 
-    // Get List
     let mut proc_info_needed = 0;
     let mut proc_info: [RM_PROCESS_INFO; 10] = std::mem::zeroed();
     let mut proc_count = 10;
     let mut reason = 0;
 
-    // Use 'Some' wrapper and check for 0 (Success) or 234 (More Data)
     let res = RmGetList(session_handle, &mut proc_info_needed, &mut proc_count, Some(proc_info.as_mut_ptr()), &mut reason);
 
     let mut results = Vec::new();
@@ -146,7 +201,6 @@ unsafe fn get_locking_processes(file_path: &str) -> Result<Vec<(u32, String)>, w
     Ok(results)
 }
 
-// --- 18. DUPLICATE FILE DESTROYER (FIXED) ---
 fn duplicate_file_destroyer() {
     println!("{}", "\n[*] DUPLICATE FILE DESTROYER...".cyan());
     let path_str: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Directory to scan").interact_text().unwrap();
@@ -166,7 +220,6 @@ fn duplicate_file_destroyer() {
             let mut hashes: std::collections::HashMap<String, Vec<PathBuf>> = std::collections::HashMap::new();
             for f in files {
                 if let Ok(hash) = calculate_hash(&f) {
-                    // FIX: Changed .or_insert_new() to .or_default()
                     hashes.entry(hash).or_default().push(f);
                 }
             }
@@ -205,7 +258,6 @@ fn scan_for_duplicates(dir: &Path, map: &mut std::collections::HashMap<u64, Vec<
             if path.is_dir() { scan_for_duplicates(&path, map); } 
             else if let Ok(meta) = path.metadata() {
                 if meta.len() > 0 { 
-                    // FIX: Changed .or_insert_new() to .or_default()
                     map.entry(meta.len()).or_default().push(path); 
                 }
             }
@@ -224,8 +276,6 @@ fn calculate_hash(path: &Path) -> Result<String, std::io::Error> {
     }
     Ok(hex::encode(hasher.finalize()))
 }
-
-// --- REST OF FUNCTIONS (ROGUE ADMIN, ETC) ---
 
 fn rogue_admin_hunter() {
     println!("{}", "\n[*] SCANNING FOR ROGUE ADMINS...".cyan());
@@ -266,7 +316,26 @@ fn demote_admin(user: &str) {
     }
 }
 
-// Existing Utilities (Bloatware, Browser Clean, etc. - Kept exactly as they were)
+fn uwp_app_surgeon() {
+    println!("{}", "\n[*] UWP APP SURGEON...".cyan());
+    let apps = &["Calculator", "Photos", "StickyNotes", "WindowsStore", "Back"];
+    let sel = Select::with_theme(&ColorfulTheme::default()).with_prompt("Select App to Re-Register").items(&apps[..]).interact().unwrap();
+    let package = match sel {
+        0 => "Microsoft.WindowsCalculator",
+        1 => "Microsoft.Windows.Photos",
+        2 => "Microsoft.MicrosoftStickyNotes",
+        3 => "Microsoft.WindowsStore",
+        _ => return,
+    };
+    println!("{}", format!("    Re-registering {}...", package).yellow());
+    let ps = format!("Get-AppxPackage -AllUsers *{}* | Foreach {{Add-AppxPackage -DisableDevelopmentMode -Register \"$($_.InstallLocation)\\AppXManifest.xml\"}}", package);
+    let _ = Command::new("powershell").args(&["-Command", &ps]).output();
+    println!("{}", "[DONE] Operation complete.".green());
+    pause();
+}
+
+// --- STANDARD FEATURES ---
+
 fn remove_bloatware() {
     println!("{}", "\n[*] STARTING BLOATWARE ASSASSIN...".cyan());
     if !Confirm::with_theme(&ColorfulTheme::default()).with_prompt("Proceed?").interact().unwrap() { return; }
