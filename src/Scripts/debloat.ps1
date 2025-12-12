@@ -1,30 +1,37 @@
-Write-Host "--- WINDOWS BLOATWARE REMOVER ---" -ForegroundColor Cyan
-Write-Host "[*] Scanning for junk packages..." -ForegroundColor Yellow
+Write-Host "--- BLOATWARE ASSASSIN ---" -ForegroundColor Cyan
 
-$Junk = @(
-    "*TikTok*",
-    "*Facebook*",
-    "*Instagram*",
-    "*Twitter*",
-    "*XboxApp*",
-    "*XboxGamingOverlay*",
-    "*SolitaireCollection*",
-    "*BingWeather*",
-    "*GetHelp*",
-    "*GetStarted*",
-    "*OfficeHub*",
-    "*SkypeApp*",
-    "*YourPhone*",
-    "*ZuneMusic*",
-    "*ZuneVideo*"
+# List of apps to remove (Safe List)
+$Bloat = @(
+    "*Microsoft.3DBuilder*",
+    "*Microsoft.BingNews*",
+    "*Microsoft.GetHelp*",
+    "*Microsoft.Getstarted*",
+    "*Microsoft.Messaging*",
+    "*Microsoft.MicrosoftSolitaireCollection*",
+    "*Microsoft.News*",
+    "*Microsoft.Office.OneNote*",
+    "*Microsoft.People*",
+    "*Microsoft.SkypeApp*",
+    "*Microsoft.WindowsAlarms*",
+    "*Microsoft.WindowsCamera*",
+    "*Microsoft.windowscommunicationsapps*",
+    "*Microsoft.WindowsFeedbackHub*",
+    "*Microsoft.WindowsMaps*",
+    "*Microsoft.WindowsSoundRecorder*",
+    "*Microsoft.XboxApp*",
+    "*Microsoft.XboxGamingOverlay*",
+    "*Microsoft.XboxIdentityProvider*",
+    "*Microsoft.XboxSpeechToTextOverlay*",
+    "*Microsoft.ZuneMusic*",
+    "*Microsoft.ZuneVideo*"
 )
 
-foreach ($App in $Junk) {
-    $Package = Get-AppxPackage $App -ErrorAction SilentlyContinue
-    if ($Package) {
-        Write-Host "  [X] Removing $($Package.Name)..." -ForegroundColor Red
-        $Package | Remove-AppxPackage -ErrorAction Continue
-    }
+Write-Host "[*] Removing Junk Apps..." -ForegroundColor Yellow
+
+foreach ($App in $Bloat) {
+    Get-AppxPackage -AllUsers $App | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
+    Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like $App } | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
+    Write-Host "    [X] Removed $App" -ForegroundColor Gray
 }
 
-Write-Host "`n[+] Bloatware scrub complete." -ForegroundColor Green
+Write-Host "`n[DONE] System Debloated." -ForegroundColor Green

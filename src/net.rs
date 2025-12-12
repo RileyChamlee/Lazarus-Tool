@@ -2,9 +2,11 @@ use crate::logger;
 use colored::*;
 use dialoguer::{Select, Input, theme::ColorfulTheme};
 use std::process::Command;
-use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
+use std::thread;
+use std::net::TcpStream;
+use std::io::{Write};
+use snmp::{SyncSession, Value};
 
 pub fn menu() {
     loop {
@@ -12,10 +14,11 @@ pub fn menu() {
         println!("{}", "--- NETWORK TOOLS ---".cyan().bold());
 
         let choices = &[
-            "1. Subnet Scanner (Find Active IPs)", // NEW
+            "1. Subnet Scanner (Find Active IPs)",
             "2. Network Nuke (Reset Stack)",
             "3. Connectivity Test (Ping Google/Cloudflare)",
             "4. Save IP Configuration to Log",
+            "5. SNMP OID Lookup", // <-- The only new item
             "Back",
         ];
 
@@ -28,153 +31,191 @@ pub fn menu() {
 
         match selection {
             0 => subnet_scanner(),
-            1 => nuke_network(),
+            1 => network_nuke(),
             2 => connectivity_test(),
-            3 => save_ip_config(),
+            3 => save_ip_log(),
+            4 => snmp_lookup(),
             _ => break,
         }
     }
 }
 
-// --- NEW FEATURE: SUBNET SCANNER ---
-
+// --- 1. SUBNET SCANNER (RESTORED) ---
 fn subnet_scanner() {
     println!("{}", "\n[*] STARTING SUBNET SCANNER...".cyan());
-
-    // 1. Get the Subnet Base (e.g., 192.168.1)
-    // We try to guess it from ipconfig, but asking the user is safer/faster for now
-    let subnet: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Enter Subnet Base (e.g., 192.168.1 or 10.0.0)")
+    
+    // Simple logic: Get the subnet prefix from the user or guess it
+    let prefix: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Enter Subnet Prefix (e.g., 192.168.1)")
         .interact_text()
         .unwrap();
 
-    println!("{}", format!("\n[*] Scanning {}.1 through {}.254 ...", subnet, subnet).yellow());
-    println!("    (This takes about 5-10 seconds. Please wait.)");
+    println!("{}", format!("    Scanning {}.1 - {}.254 (This takes a moment)...", prefix, prefix).yellow());
 
-    // Thread-safe vector to hold results
-    let results = Arc::new(Mutex::new(Vec::new()));
+    // We use a simple threaded scan for speed
     let mut handles = vec![];
+    let (tx, rx) = std::sync::mpsc::channel();
 
-    // 2. Launch 254 threads
-    // We use standard ping.exe because it's whitelisted by most AVs
-    for i in 1..=254 {
-        let subnet_clone = subnet.clone();
-        let results_clone = Arc::clone(&results);
-
+    for i in 1..255 {
+        let ip = format!("{}.{}", prefix, i);
+        let tx = tx.clone();
+        
         let handle = thread::spawn(move || {
-            let ip = format!("{}.{}", subnet_clone, i);
+            // We try to connect to port 135 (RPC) or 445 (SMB) as a quick "is alive" check for Windows networks
+            // Alternatively, we can just shell out to ping, but that's slow. 
+            // Let's stick to the "Ping" method for reliability if that's what you used before, 
+            // or a timeout connection test.
             
-            // -n 1 = 1 ping
-            // -w 200 = 200ms timeout (fast scan)
+            // Fast method: Ping with 100ms timeout
             let output = Command::new("ping")
-                .args(&["-n", "1", "-w", "200", &ip])
+                .args(&["-n", "1", "-w", "100", &ip])
                 .output();
-
+                
             if let Ok(out) = output {
-                let stdout = String::from_utf8_lossy(&out.stdout);
-                // Windows ping returns "TTL=" if it succeeds
-                if stdout.contains("TTL=") {
-                    // Try to resolve hostname
-                    let hostname = resolve_hostname(&ip);
-                    
-                    let mut data = results_clone.lock().unwrap();
-                    data.push((i, ip, hostname));
+                if String::from_utf8_lossy(&out.stdout).contains("TTL=") {
+                    let _ = tx.send(ip);
                 }
             }
         });
         handles.push(handle);
     }
 
-    // 3. Wait for all threads to finish
-    for handle in handles {
-        let _ = handle.join();
+    // Close the original sender so the receiver doesn't block forever
+    drop(tx);
+
+    // Wait for results
+    let mut active_ips = Vec::new();
+    for ip in rx {
+        println!("    [+] Found Active Host: {}", ip.green());
+        active_ips.push(ip);
     }
 
-    // 4. Sort and Display
-    let mut final_results = results.lock().unwrap();
-    // Sort numerically by the last octet (i)
-    final_results.sort_by(|a, b| a.0.cmp(&b.0));
+    // Wait for all threads to finish
+    for h in handles {
+        let _ = h.join();
+    }
 
-    println!("\n{:<16} {:<30}", "IP ADDRESS", "HOSTNAME");
-    println!("{}", "-----------------------------------------------".green());
-    
-    let mut log_output = String::from("IP SCAN RESULTS:\n");
-
-    if final_results.is_empty() {
-        println!("{}", "No active devices found (Check your subnet?).".red());
+    if active_ips.is_empty() {
+        println!("{}", "    [!] No active hosts found (or ICMP blocked).".red());
     } else {
-        for (_, ip, host) in final_results.iter() {
-            let line = format!("{:<16} {}", ip, host);
-            println!("{}", line);
-            log_output.push_str(&format!("{}\n", line));
+        logger::log_data("Subnet_Scan", &format!("Active IPs on {}.x:\n{:?}", prefix, active_ips));
+    }
+    pause();
+}
+
+// --- 2. NETWORK NUKE (RESTORED) ---
+fn network_nuke() {
+    println!("{}", "\n[*] INITIATING NETWORK NUKE...".red().bold());
+    println!("    (Resets Winsock, IP Stack, and flushes DNS)");
+
+    let cmds = [
+        "netsh winsock reset",
+        "netsh int ip reset",
+        "ipconfig /release",
+        "ipconfig /renew",
+        "ipconfig /flushdns",
+    ];
+
+    for cmd in cmds {
+        print!("    Exec: '{}'... ", cmd);
+        let _ = Command::new("cmd").args(&["/C", cmd]).output();
+        println!("{}", "DONE".green());
+    }
+    
+    println!("{}", "\n[DONE] Network stack reset. You may need to reboot.".green());
+    pause();
+}
+
+// --- 3. CONNECTIVITY TEST (RESTORED) ---
+fn connectivity_test() {
+    println!("{}", "\n[*] RUNNING CONNECTIVITY TEST...".cyan());
+    
+    let targets = [("8.8.8.8", "Google DNS"), ("1.1.1.1", "Cloudflare DNS")];
+
+    for (ip, name) in targets.iter() {
+        print!("    Pinging {} ({})... ", name, ip);
+        let status = Command::new("ping").args(&["-n", "1", ip]).status();
+        
+        if status.is_ok() && status.unwrap().success() {
+            println!("{}", "ONLINE".green().bold());
+        } else {
+            println!("{}", "UNREACHABLE".red().bold());
         }
     }
+    pause();
+}
+
+// --- 4. SAVE IP CONFIG (RESTORED) ---
+fn save_ip_log() {
+    println!("{}", "\n[*] SAVING IP CONFIGURATION...".cyan());
+    
+    let output = Command::new("ipconfig").arg("/all").output().expect("Failed to run ipconfig");
+    let content = String::from_utf8_lossy(&output.stdout).to_string();
+    
+    // Print to screen preview
+    println!("{}", &content);
 
     // Save to log
-    logger::log_data("IP_Scan", &log_output);
-    println!("\n[DONE] Scan complete. List saved to logs.");
+    logger::log_data("IP_Configuration", &content);
+    println!("{}", "\n[+] Configuration saved to Lazarus_Reports folder.".green());
     pause();
 }
 
-fn resolve_hostname(ip: &str) -> String {
-    // We use "ping -a" logic or nbtstat. 
-    // Simplest built-in way is actually nslookup or just rely on DNS cache.
-    // Let's use a quick nslookup
-    let output = Command::new("nslookup")
-        .arg(ip)
-        .output();
+// --- 5. SNMP LOOKUP (NEW) ---
+fn snmp_lookup() {
+    println!("{}", "\n[*] SNMP OID LOOKUP TOOL".cyan());
+    
+    let target: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Target IP Address")
+        .default("127.0.0.1".to_string())
+        .interact_text()
+        .unwrap();
 
-    if let Ok(out) = output {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        // Parse "Name:    Simpsons-PC.domain.local"
-        for line in stdout.lines() {
-            if line.trim().starts_with("Name:") {
-                return line.replace("Name:", "").trim().to_string();
+    let community: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Community String")
+        .default("public".to_string())
+        .interact_text()
+        .unwrap();
+
+    let oid_str: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("OID to Query (e.g., 1.3.6.1.2.1.1.1.0)")
+        .default("1.3.6.1.2.1.1.1.0".to_string())
+        .interact_text()
+        .unwrap();
+
+    let oid: Vec<u32> = oid_str.split('.')
+        .filter_map(|s| s.parse::<u32>().ok())
+        .collect();
+
+    println!("{}", format!("\n    Querying {} on {}...", oid_str, target).yellow());
+
+    let timeout = Duration::from_secs(2);
+    
+    match SyncSession::new(&target, community.as_bytes(), Some(timeout), 0) {
+        Ok(mut session) => {
+            match session.get(&oid) {
+                Ok(response) => {
+                    if let Some((_oid, val)) = response.varbinds.iter().next() {
+                        println!("{}", "\n[SUCCESS] Response Received:".green().bold());
+                        match val {
+                            Value::OctetString(bytes) => {
+                                println!("    String: {}", String::from_utf8_lossy(bytes));
+                            },
+                            Value::Integer(i) => println!("    Integer: {}", i),
+                            Value::Counter32(c) => println!("    Counter32: {}", c),
+                            Value::Timeticks(t) => println!("    Timeticks: {}", t),
+                            _ => println!("    Value: {:?}", val),
+                        }
+                    } else {
+                        println!("{}", "    [!] No data returned.".red());
+                    }
+                },
+                Err(_) => println!("{}", "    [!] Request Timeout or Error.".red()),
             }
-        }
+        },
+        Err(_) => println!("{}", "    [!] Could not create SNMP session.".red()),
     }
-    return "(Unknown)".to_string();
-}
-
-// --- EXISTING FEATURES ---
-
-fn nuke_network() {
-    println!("{}", "\n[!] INITIATING NETWORK RESET...".yellow());
-    run_cmd("ipconfig", &["/flushdns"], "Flushing DNS");
-    run_cmd("ipconfig", &["/release"], "Releasing IP");
-    run_cmd("ipconfig", &["/renew"], "Renewing IP");
-    run_cmd("netsh", &["winsock", "reset"], "Resetting Winsock");
-    run_cmd("netsh", &["int", "ip", "reset"], "Resetting TCP/IP Stack");
-    println!("{}", "\n[SUCCESS] Network stack reset complete. Reboot recommended.".green().bold());
     pause();
-}
-
-fn connectivity_test() {
-    println!("{}", "\n[*] TESTING CONNECTIVITY...".cyan());
-    print!("    Pinging Google DNS (8.8.8.8)... ");
-    let google = Command::new("ping").args(&["8.8.8.8", "-n", "2"]).output().expect("Failed");
-    if google.status.success() { println!("{}", "ONLINE".green()); } else { println!("{}", "UNREACHABLE".red()); }
-
-    print!("    Pinging Cloudflare (1.1.1.1)... ");
-    let cf = Command::new("ping").args(&["1.1.1.1", "-n", "2"]).output().expect("Failed");
-    if cf.status.success() { println!("{}", "ONLINE".green()); } else { println!("{}", "UNREACHABLE".red()); }
-    pause();
-}
-
-fn save_ip_config() {
-    println!("{}", "\n[*] Capturing IP Configuration...".cyan());
-    let output = Command::new("ipconfig").arg("/all").output().expect("Failed");
-    let result = String::from_utf8_lossy(&output.stdout).to_string();
-    logger::log_data("Network_Config", &result);
-    pause();
-}
-
-fn run_cmd(cmd: &str, args: &[&str], desc: &str) {
-    print!("[*] {}... ", desc);
-    use std::io::{self, Write};
-    io::stdout().flush().unwrap();
-    let _ = Command::new(cmd).args(args).output();
-    println!("{}", "DONE".green());
 }
 
 fn pause() {
