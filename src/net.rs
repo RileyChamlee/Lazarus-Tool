@@ -16,7 +16,7 @@ pub fn menu() {
             "2. Network Nuke (Reset Stack)",
             "3. Connectivity Test (Ping Google/Cloudflare)",
             "4. Save IP Configuration to Log",
-            "5. SNMP Walk (Discover OIDs)", // Renamed
+            "5. SNMP Walk (Discover OIDs)",
             "Back",
         ];
 
@@ -32,13 +32,13 @@ pub fn menu() {
             1 => network_nuke(),
             2 => connectivity_test(),
             3 => save_ip_log(),
-            4 => snmp_walk(), // Calls the new walker
+            4 => snmp_walk(),
             _ => break,
         }
     }
 }
 
-// --- 5. SNMP WALK (NEW: Discovers OIDs) ---
+// --- 5. SNMP WALK (FIXED) ---
 fn snmp_walk() {
     println!("{}", "\n[*] SNMP WALKER (DISCOVERY TOOL)".cyan());
     println!("    (This will list all available OIDs starting from your root)");
@@ -55,7 +55,6 @@ fn snmp_walk() {
         .interact_text()
         .unwrap();
 
-    // Default to 'system' branch, which is safe and usually exists
     let root_oid_str: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("Start Walking at OID (Default: System Info)")
         .default("1.3.6.1.2.1.1".to_string()) 
@@ -67,7 +66,8 @@ fn snmp_walk() {
         .collect();
 
     println!("{}", format!("\n    Scanning {} starting at {}...", target, root_oid_str).yellow());
-    println!("{}", "    (Press Ctrl+C to stop if it goes on forever)\n".gray());
+    // FIX 1: Changed .gray() to .dimmed()
+    println!("{}", "    (Press Ctrl+C to stop if it goes on forever)\n".dimmed());
 
     let timeout = Duration::from_secs(2);
     
@@ -77,23 +77,25 @@ fn snmp_walk() {
             let mut count = 0;
 
             loop {
-                // GETNEXT is the magic command that finds the "next" OID for you
                 match session.getnext(&current_oid) {
                     Ok(mut response) => {
-                        if let Some((next_oid, val)) = response.varbinds.next() {
-                            // Check if we have stepped outside the tree we wanted to scan
-                            if next_oid.len() < root_oid.len() || &next_oid[0..root_oid.len()] != &root_oid[..] {
+                        if let Some((next_oid_struct, val)) = response.varbinds.next() {
+                            // FIX 2: Convert OID struct to slice using .as_ref() to check length/content
+                            let next_oid_slice = next_oid_struct.as_ref();
+
+                            if next_oid_slice.len() < root_oid.len() || &next_oid_slice[0..root_oid.len()] != &root_oid[..] {
                                 break;
                             }
 
-                            // Print the Result
-                            let oid_string = next_oid.iter().map(|i| i.to_string()).collect::<Vec<String>>().join(".");
+                            // FIX 3: Convert to string properly
+                            let oid_string = next_oid_slice.iter()
+                                .map(|i| i.to_string())
+                                .collect::<Vec<String>>()
+                                .join(".");
                             
                             match val {
                                 Value::OctetString(bytes) => {
-                                    // Try to print strings cleanly
                                     let s = String::from_utf8_lossy(bytes);
-                                    // If it looks like garbage characters, print raw bytes
                                     if s.chars().any(|c| c.is_control() && !c.is_whitespace()) {
                                         println!("    {} = [Binary Data]", oid_string);
                                     } else {
@@ -106,17 +108,16 @@ fn snmp_walk() {
                                 _ => println!("    {} = {:?}", oid_string.green(), val),
                             }
 
-                            // Update loop to look for the next one
-                            current_oid = next_oid;
+                            // FIX 4: Convert slice back to Vec<u32> for storage
+                            current_oid = next_oid_slice.to_vec();
                             count += 1;
 
-                            // Safety break to prevent infinite loops on weird devices
                             if count >= 100 {
                                 println!("{}", "    --- (Limit reached: 100 items) ---".yellow());
                                 break;
                             }
                         } else {
-                            break; // End of tree
+                            break;
                         }
                     },
                     Err(_) => {
