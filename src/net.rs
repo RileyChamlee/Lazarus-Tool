@@ -129,7 +129,6 @@ fn lookup_vendor(mac: &str) -> String {
     if prefix.len() < 6 { return "".to_string(); }
     let oui = &prefix[0..6];
 
-    // FIX: Added .to_string() to all return values
     match oui {
         "00155D" | "0003FF" => "Microsoft Hyper-V".to_string(),
         "005056" | "000C29" | "000569" => "VMware".to_string(),
@@ -192,4 +191,53 @@ fn snmp_walk() {
     println!("{}", "\n[*] SNMP WALKER (DISCOVERY TOOL)".cyan());
     
     let target: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Target IP Address").default("127.0.0.1".to_string()).interact_text().unwrap();
-    let community: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Community String").default("public".to_string()).interact_text
+    let community: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Community String").default("public".to_string()).interact_text().unwrap();
+    let root_oid_str: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Start Walking at OID").default("1.3.6.1.2.1.1".to_string()).interact_text().unwrap();
+    let root_oid: Vec<u32> = root_oid_str.split('.').filter_map(|s| s.parse::<u32>().ok()).collect();
+
+    println!("{}", format!("\n    Scanning {} starting at {}...", target, root_oid_str).yellow());
+    println!("{}", "    (Press Ctrl+C to stop if it goes on forever)\n".dimmed());
+
+    let timeout = Duration::from_secs(2);
+    
+    match SyncSession::new(&target, community.as_bytes(), Some(timeout), 0) {
+        Ok(mut session) => {
+            let mut current_oid = root_oid.clone();
+            let mut count = 0;
+            loop {
+                match session.getnext(&current_oid) {
+                    Ok(mut response) => {
+                        if let Some((next_oid_struct, val)) = response.varbinds.next() {
+                            let next_oid_string = next_oid_struct.to_string();
+                            if !next_oid_string.starts_with(&root_oid_str) { break; }
+                            
+                            match val {
+                                Value::OctetString(bytes) => {
+                                    let s = String::from_utf8_lossy(bytes);
+                                    if s.chars().any(|c| c.is_control() && !c.is_whitespace()) {
+                                        println!("    {} = [Binary Data]", next_oid_string);
+                                    } else {
+                                        println!("    {} = {}", next_oid_string.green(), s);
+                                    }
+                                },
+                                Value::Integer(i) => println!("    {} = {} (Int)", next_oid_string.green(), i),
+                                _ => println!("    {} = {:?}", next_oid_string.green(), val),
+                            }
+                            current_oid = next_oid_string.split('.').filter_map(|s| s.parse::<u32>().ok()).collect();
+                            count += 1;
+                            if count >= 100 { println!("{}", "    --- (Limit reached) ---".yellow()); break; }
+                        } else { break; }
+                    },
+                    Err(_) => break,
+                }
+            }
+        },
+        Err(_) => println!("{}", "    [!] Could not create SNMP session.".red()),
+    }
+    pause();
+}
+
+fn pause() {
+    println!("\nPress Enter to continue...");
+    let _ = std::io::stdin().read_line(&mut String::new());
+}
