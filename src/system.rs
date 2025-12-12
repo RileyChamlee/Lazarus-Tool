@@ -2,12 +2,19 @@ use crate::logger;
 use colored::*;
 use dialoguer::{Select, Input, Confirm, theme::ColorfulTheme};
 use std::process::Command;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::fs::{self, File};
-use std::io::Write;
-use sysinfo::{System, SystemExt, DiskExt};
+use std::io::{Read, Write};
+use sysinfo::{System, SystemExt};
 use winreg::enums::*;
 use winreg::RegKey;
+use sha2::{Sha256, Digest}; // For Duplicate Destroyer
+
+// Windows API Imports for File Locksmith
+use windows::Win32::System::RestartManager::*;
+use windows::Win32::Foundation::{PWSTR, HANDLE};
+use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt;
 
 pub fn menu() {
     loop {
@@ -19,7 +26,7 @@ pub fn menu() {
             "2. User Profile Restore (Migrate User)",
             "3. FSLogix Medic (Unlock User / Drain Mode)",
             "4. Browser Deep Clean (Chrome/Edge/Firefox)",
-            "5. Remove Bloatware (Xbox, TikTok, Solitaire)", // <--- RESTORED
+            "5. Remove Bloatware (Xbox, TikTok, Solitaire)",
             "6. Enable WireGuard for Non-Admins",
             "7. Scan for Hardware Errors (Device Manager)",
             "8. Reset Hosts File",
@@ -30,6 +37,9 @@ pub fn menu() {
             "13. Battery Deep Dive",
             "14. Generate Health Report",
             "15. Fix Broken File Extensions (.exe, .lnk)",
+            "16. Rogue Admin Hunter (Scan/Demote Admins)",
+            "17. File Locksmith (Unlock/Kill Processes)", // <--- NEW
+            "18. Duplicate File Destroyer (Find & Delete)", // <--- NEW
             "Back",
         ];
 
@@ -45,7 +55,7 @@ pub fn menu() {
             1 => profile_restore_workflow(),
             2 => fslogix_medic(),
             3 => browser_deep_clean(),
-            4 => remove_bloatware(), // <--- RESTORED FUNCTION
+            4 => remove_bloatware(),
             5 => enable_wireguard_non_admin(),
             6 => scan_hardware_errors(),
             7 => reset_hosts_file(),
@@ -56,56 +66,288 @@ pub fn menu() {
             12 => battery_forensics(),
             13 => health_report(),
             14 => fix_file_extensions(),
+            15 => rogue_admin_hunter(),
+            16 => file_locksmith(), // <--- NEW CALL
+            17 => duplicate_file_destroyer(), // <--- NEW CALL
             _ => break,
         }
     }
 }
 
-// --- RESTORED: REMOVE BLOATWARE ---
-fn remove_bloatware() {
-    println!("{}", "\n[*] STARTING BLOATWARE ASSASSIN...".cyan());
-    println!("    (Removing: Xbox, Solitaire, BingNews, Zune, etc.)");
+// --- 17. FILE LOCKSMITH (The Unlocker) ---
+fn file_locksmith() {
+    println!("{}", "\n[*] FILE LOCKSMITH (UNLOCKER)...".cyan());
     
-    // We add a confirmation because this modifies the OS
-    if !Confirm::with_theme(&ColorfulTheme::default()).with_prompt("Proceed with Debloat?").interact().unwrap() {
+    let path_str: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Enter the full path of the locked file")
+        .interact_text()
+        .unwrap();
+
+    let path = Path::new(&path_str);
+    if !path.exists() {
+        println!("{}", "    [!] File does not exist.".red());
+        pause();
         return;
     }
 
+    println!("{}", format!("    Inspecting handles for: {:?}", path).yellow());
+
+    unsafe {
+        match get_locking_processes(&path_str) {
+            Ok(procs) => {
+                if procs.is_empty() {
+                    println!("{}", "    [+] No processes found locking this file.".green());
+                } else {
+                    println!("\n{:<10} | {:<25}", "PID", "PROCESS NAME");
+                    println!("{}", "-------------------------------------".blue());
+                    
+                    for (pid, name) in &procs {
+                        println!("{:<10} | {}", pid.to_string().yellow(), name.red());
+                    }
+
+                    if Confirm::with_theme(&ColorfulTheme::default())
+                        .with_prompt("\nKill these processes to unlock the file?")
+                        .default(false)
+                        .interact()
+                        .unwrap() 
+                    {
+                        for (pid, _) in procs {
+                            run_cmd("taskkill", &["/F", "/PID", &pid.to_string()], "Terminating");
+                        }
+                    }
+                }
+            },
+            Err(_) => println!("{}", "    [!] Failed to query Restart Manager API.".red()),
+        }
+    }
+    pause();
+}
+
+// Windows API Helper for Locksmith
+unsafe fn get_locking_processes(file_path: &str) -> Result<Vec<(u32, String)>, windows::core::Error> {
+    let mut session_handle: u32 = 0;
+    let mut session_key: [u16; 64] = [0; 64]; 
+
+    let _ = RmStartSession(&mut session_handle, 0, PWSTR(session_key.as_mut_ptr()));
+
+    let wide_path: Vec<u16> = OsStr::new(file_path).encode_wide().chain(Some(0)).collect();
+    let resources = [PWSTR(wide_path.as_ptr() as *mut _)];
+    let _ = RmRegisterResources(session_handle, 1, resources.as_ptr(), 0, std::ptr::null(), 0, std::ptr::null());
+
+    let mut proc_info_needed = 0;
+    let mut proc_info: [RM_PROCESS_INFO; 10] = std::mem::zeroed();
+    let mut proc_count = 10;
+    let mut reason = 0;
+
+    let res = RmGetList(session_handle, &mut proc_info_needed, &mut proc_count, proc_info.as_mut_ptr(), &mut reason);
+
+    let mut results = Vec::new();
+    if res.is_ok() || res.0 == 234 { 
+        for i in 0..proc_count as usize {
+            let pid = proc_info[i].Process.dwProcessId;
+            let name_arr = proc_info[i].strAppName;
+            let name_len = name_arr.iter().position(|&c| c == 0).unwrap_or(name_arr.len());
+            let name = String::from_utf16_lossy(&name_arr[0..name_len]);
+            results.push((pid, name));
+        }
+    }
+    let _ = RmEndSession(session_handle);
+    Ok(results)
+}
+
+// --- 18. DUPLICATE FILE DESTROYER ---
+fn duplicate_file_destroyer() {
+    println!("{}", "\n[*] DUPLICATE FILE DESTROYER...".cyan());
+    
+    let path_str: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Directory to scan (Recursive)")
+        .interact_text()
+        .unwrap();
+
+    let root = Path::new(&path_str);
+    if !root.exists() {
+        println!("{}", "    [!] Directory not found.".red());
+        pause();
+        return;
+    }
+
+    println!("{}", "    Scanning files (Grouping by size)...".yellow());
+    let mut files_by_size: std::collections::HashMap<u64, Vec<PathBuf>> = std::collections::HashMap::new();
+    
+    // 1. Walk and Group by Size (Fast)
+    scan_for_duplicates(root, &mut files_by_size);
+
+    // 2. Hash only the potential matches (Slow, but necessary)
+    let mut duplicates: Vec<Vec<PathBuf>> = Vec::new();
+    
+    println!("{}", "    Hashing potential matches...".yellow());
+    for (_, files) in files_by_size {
+        if files.len() > 1 {
+            let mut hashes: std::collections::HashMap<String, Vec<PathBuf>> = std::collections::HashMap::new();
+            
+            for f in files {
+                if let Ok(hash) = calculate_hash(&f) {
+                    hashes.entry(hash).or_insert_new().push(f);
+                }
+            }
+
+            for (_, group) in hashes {
+                if group.len() > 1 {
+                    duplicates.push(group);
+                }
+            }
+        }
+    }
+
+    if duplicates.is_empty() {
+        println!("{}", "\n[+] No duplicates found.".green());
+    } else {
+        println!("\n[!] FOUND DUPLICATES:");
+        for group in &duplicates {
+            println!("{}", "---------------------------------".blue());
+            println!("MATCH SET:");
+            for (i, file) in group.iter().enumerate() {
+                println!("  [{}] {:?}", i, file);
+            }
+            
+            // Ask to delete copies
+            if Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt("Delete copies? (Keeps the first one, deletes others)")
+                .default(false)
+                .interact()
+                .unwrap() 
+            {
+                for file in group.iter().skip(1) {
+                    print!("    Deleting {:?}... ", file);
+                    match fs::remove_file(file) {
+                        Ok(_) => println!("{}", "DONE".green()),
+                        Err(_) => println!("{}", "FAIL".red()),
+                    }
+                }
+            }
+        }
+    }
+    pause();
+}
+
+fn scan_for_duplicates(dir: &Path, map: &mut std::collections::HashMap<u64, Vec<PathBuf>>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                scan_for_duplicates(&path, map);
+            } else {
+                if let Ok(meta) = path.metadata() {
+                    let len = meta.len();
+                    if len > 0 {
+                        map.entry(len).or_insert_new().push(path);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn calculate_hash(path: &Path) -> Result<String, std::io::Error> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 4096];
+    
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 { break; }
+        hasher.update(&buffer[..count]);
+    }
+    
+    Ok(hex::encode(hasher.finalize()))
+}
+
+// --- ROGUE ADMIN HUNTER ---
+fn rogue_admin_hunter() {
+    println!("{}", "\n[*] SCANNING FOR ROGUE ADMINS...".cyan());
+    
+    let ps_cmd = "Get-LocalGroupMember -Group 'Administrators' | Select-Object -ExpandProperty Name";
+    let output = Command::new("powershell")
+        .args(&["-NoProfile", "-Command", ps_cmd])
+        .output()
+        .expect("Failed to query admins");
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let admins: Vec<&str> = output_str.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+
+    let is_safe = |name: &str| -> bool {
+        let n = name.to_lowercase();
+        n.contains("mhk") || 
+        n.contains("itadmin") || 
+        n.contains("aeadmin") || 
+        n.contains("domain admins") || 
+        n == "administrator"
+    };
+
+    let mut rogues_found = false;
+
+    println!("{:<30} {:<10}", "USER ACCOUNT", "STATUS");
+    println!("{}", "------------------------------------------".blue());
+
+    for admin in admins {
+        if is_safe(admin) {
+            println!("{:<30} {}", admin, "[SAFE]".green());
+        } else {
+            rogues_found = true;
+            println!("{:<30} {}", admin, "[ROGUE]".red().bold());
+            
+            let prompt = format!("    -> Demote '{}' immediately?", admin);
+            if Confirm::with_theme(&ColorfulTheme::default())
+                .with_prompt(&prompt)
+                .default(false)
+                .interact()
+                .unwrap() 
+            {
+                demote_admin(admin);
+            }
+        }
+    }
+
+    if !rogues_found {
+        println!("{}", "\n[+] No rogue admins detected.".green());
+    }
+    pause();
+}
+
+fn demote_admin(user: &str) {
+    print!("       Removing rights... ");
+    let status = Command::new("net")
+        .args(&["localgroup", "administrators", user, "/delete"])
+        .output();
+
+    match status {
+        Ok(s) if s.status.success() => println!("{}", "SUCCESS".green()),
+        _ => println!("{}", "FAILED (Check syntax/permissions)".red()),
+    }
+}
+
+// --- EXISTING FEATURES ---
+
+fn remove_bloatware() {
+    println!("{}", "\n[*] STARTING BLOATWARE ASSASSIN...".cyan());
+    println!("    (Removing: Xbox, Solitaire, BingNews, Zune, etc.)");
+    if !Confirm::with_theme(&ColorfulTheme::default()).with_prompt("Proceed with Debloat?").interact().unwrap() { return; }
     let script = include_str!("scripts/debloat.ps1");
     run_embedded_powershell("debloat", script, Vec::new());
 }
 
-// --- BROWSER CLEAN ---
 fn browser_deep_clean() {
     println!("{}", "\n[*] STARTING BROWSER DEEP CLEAN...".cyan());
     println!("    (This will force close Chrome, Edge, and Firefox)");
-    
-    if !Confirm::with_theme(&ColorfulTheme::default()).with_prompt("Proceed?").interact().unwrap() {
-        return;
-    }
-
+    if !Confirm::with_theme(&ColorfulTheme::default()).with_prompt("Proceed?").interact().unwrap() { return; }
     let script = include_str!("scripts/browser_clean.ps1");
     run_embedded_powershell("browser_clean", script, Vec::new());
 }
 
-// --- FSLOGIX MEDIC ---
 fn fslogix_medic() {
     println!("{}", "\n--- FSLOGIX MEDIC ---".red().bold());
-    let choices = &[
-        "1. Unlock Specific User (Kill Zombie Processes)",
-        "2. Emergency: Enable DRAIN MODE (Stop new logins)",
-        "3. Recovery: Disable DRAIN MODE (Allow logins)",
-        "4. Service CPR: Restart FSLogix Services",
-        "Back"
-    ];
-    
-    let sel = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select Action")
-        .default(0)
-        .items(&choices[..])
-        .interact()
-        .unwrap();
-
+    let choices = &["1. Unlock Specific User", "2. Enable DRAIN MODE", "3. Disable DRAIN MODE", "4. Restart Services", "Back"];
+    let sel = Select::with_theme(&ColorfulTheme::default()).with_prompt("Select Action").default(0).items(&choices[..]).interact().unwrap();
     match sel {
         0 => fslogix_unlock_user(),
         1 => set_drain_mode(true),
@@ -139,7 +381,6 @@ fn restart_fslogix() {
     pause();
 }
 
-// --- EXISTING FEATURES ---
 fn scan_hardware_errors() {
     println!("{}", "\n[*] SCANNING PNP DEVICES FOR ERRORS...".cyan());
     let script = include_str!("scripts/device_audit.ps1");
@@ -197,7 +438,6 @@ fn profile_restore_workflow() {
     run_embedded_powershell("restore", script, args);
 }
 
-// --- HELPER FOR EMBEDDED SCRIPTS ---
 fn run_embedded_powershell(name: &str, content: &str, ps_args: Vec<String>) {
     use std::time::{SystemTime, UNIX_EPOCH};
     let start = SystemTime::now();

@@ -1,6 +1,6 @@
 [package]
 name = "lazarus"
-version = "2.0.6"   # <--- CHANGE THIS from "2.0.4" to "2.0.5"
+version = "2.0.9"
 edition = "2021"
 
 [dependencies]
@@ -10,9 +10,19 @@ sysinfo = "0.29"
 chrono = "0.4"
 dialoguer = "0.10"
 winreg = "0.10"
-ureq = "2.6"          # For the Auto-Updater
-serde_json = "1.0"    # For the Auto-Updater
-snmp = "0.2"          # <--- CHANGE THIS from "5.2" to "0.2"
+ureq = "2.6"
+serde_json = "1.0"
+snmp = "0.2"
+sha2 = "0.10"     # <--- Required for Duplicate Destroyer
+hex = "0.4"       # <--- Required for Duplicate Destroyer
+
+[dependencies.windows]
+version = "0.48"
+features = [
+    "Win32_Foundation",
+    "Win32_System_RestartManager",
+    "Win32_System_StationsAndDesktops",
+]
 
 [build-dependencies]
 winres = "0.1"
