@@ -38,7 +38,7 @@ pub fn menu() {
     }
 }
 
-// --- 5. SNMP WALK (FIXED) ---
+// --- 5. SNMP WALK (FIXED: STRING STRATEGY) ---
 fn snmp_walk() {
     println!("{}", "\n[*] SNMP WALKER (DISCOVERY TOOL)".cyan());
     println!("    (This will list all available OIDs starting from your root)");
@@ -61,13 +61,13 @@ fn snmp_walk() {
         .interact_text()
         .unwrap();
 
+    // Prepare initial numeric OID
     let root_oid: Vec<u32> = root_oid_str.split('.')
         .filter_map(|s| s.parse::<u32>().ok())
         .collect();
 
     println!("{}", format!("\n    Scanning {} starting at {}...", target, root_oid_str).yellow());
-    // FIX 1: Changed .gray() to .dimmed()
-    println!("{}", "    (Press Ctrl+C to stop if it goes on forever)\n".dimmed());
+    println!("{}", "    (Press Ctrl+C to stop if it goes on forever)\n".dimmed()); // Fixed .gray() to .dimmed()
 
     let timeout = Duration::from_secs(2);
     
@@ -80,36 +80,36 @@ fn snmp_walk() {
                 match session.getnext(&current_oid) {
                     Ok(mut response) => {
                         if let Some((next_oid_struct, val)) = response.varbinds.next() {
-                            // FIX 2: Convert OID struct to slice using .as_ref() to check length/content
-                            let next_oid_slice = next_oid_struct.as_ref();
+                            
+                            // FIX: Convert OID to String to bypass missing methods
+                            let next_oid_string = next_oid_struct.to_string();
 
-                            if next_oid_slice.len() < root_oid.len() || &next_oid_slice[0..root_oid.len()] != &root_oid[..] {
+                            // Check if we stepped outside our target tree
+                            // We check if the new OID starts with our Root OID string
+                            if !next_oid_string.starts_with(&root_oid_str) {
                                 break;
                             }
 
-                            // FIX 3: Convert to string properly
-                            let oid_string = next_oid_slice.iter()
-                                .map(|i| i.to_string())
-                                .collect::<Vec<String>>()
-                                .join(".");
-                            
                             match val {
                                 Value::OctetString(bytes) => {
                                     let s = String::from_utf8_lossy(bytes);
                                     if s.chars().any(|c| c.is_control() && !c.is_whitespace()) {
-                                        println!("    {} = [Binary Data]", oid_string);
+                                        println!("    {} = [Binary Data]", next_oid_string);
                                     } else {
-                                        println!("    {} = {}", oid_string.green(), s);
+                                        println!("    {} = {}", next_oid_string.green(), s);
                                     }
                                 },
-                                Value::Integer(i) => println!("    {} = {} (Int)", oid_string.green(), i),
-                                Value::Counter32(c) => println!("    {} = {} (Counter)", oid_string.green(), c),
-                                Value::Timeticks(t) => println!("    {} = {} (Ticks)", oid_string.green(), t),
-                                _ => println!("    {} = {:?}", oid_string.green(), val),
+                                Value::Integer(i) => println!("    {} = {} (Int)", next_oid_string.green(), i),
+                                Value::Counter32(c) => println!("    {} = {} (Counter)", next_oid_string.green(), c),
+                                Value::Timeticks(t) => println!("    {} = {} (Ticks)", next_oid_string.green(), t),
+                                _ => println!("    {} = {:?}", next_oid_string.green(), val),
                             }
 
-                            // FIX 4: Convert slice back to Vec<u32> for storage
-                            current_oid = next_oid_slice.to_vec();
+                            // FIX: Parse the string back into numbers for the next loop
+                            current_oid = next_oid_string.split('.')
+                                .filter_map(|s| s.parse::<u32>().ok())
+                                .collect();
+                            
                             count += 1;
 
                             if count >= 100 {
