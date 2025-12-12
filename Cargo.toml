@@ -1,6 +1,6 @@
 [package]
 name = "lazarus"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2021"
 
 [dependencies]
@@ -12,7 +12,7 @@ dialoguer = "0.10"
 winreg = "0.10"
 ureq = "2.6"          # For the Auto-Updater
 serde_json = "1.0"    # For the Auto-Updater
-snmp = "5.2"          # <--- THE NEW ADDITION for net.rs
+snmp = "0.2"          # <--- CHANGE THIS from "5.2" to "0.2"
 
 [build-dependencies]
 winres = "0.1"
