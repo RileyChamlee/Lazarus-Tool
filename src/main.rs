@@ -10,7 +10,7 @@ mod sharepoint;
 mod update; // <--- MAKE SURE THIS IS HERE
 
 // This version number MUST match Cargo.toml for updates to work correctly
-const VERSION: &str = "2.0.1"; 
+const VERSION: &str = "2.0.2"; 
 
 fn main() {
     loop {

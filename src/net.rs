@@ -4,8 +4,6 @@ use dialoguer::{Select, Input, theme::ColorfulTheme};
 use std::process::Command;
 use std::time::Duration;
 use std::thread;
-use std::net::TcpStream;
-use std::io::{Write};
 use snmp::{SyncSession, Value};
 
 pub fn menu() {
@@ -18,7 +16,7 @@ pub fn menu() {
             "2. Network Nuke (Reset Stack)",
             "3. Connectivity Test (Ping Google/Cloudflare)",
             "4. Save IP Configuration to Log",
-            "5. SNMP OID Lookup", // <-- The only new item
+            "5. SNMP OID Lookup",
             "Back",
         ];
 
@@ -40,11 +38,10 @@ pub fn menu() {
     }
 }
 
-// --- 1. SUBNET SCANNER (RESTORED) ---
+// --- 1. SUBNET SCANNER ---
 fn subnet_scanner() {
     println!("{}", "\n[*] STARTING SUBNET SCANNER...".cyan());
     
-    // Simple logic: Get the subnet prefix from the user or guess it
     let prefix: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("Enter Subnet Prefix (e.g., 192.168.1)")
         .interact_text()
@@ -52,7 +49,6 @@ fn subnet_scanner() {
 
     println!("{}", format!("    Scanning {}.1 - {}.254 (This takes a moment)...", prefix, prefix).yellow());
 
-    // We use a simple threaded scan for speed
     let mut handles = vec![];
     let (tx, rx) = std::sync::mpsc::channel();
 
@@ -61,12 +57,6 @@ fn subnet_scanner() {
         let tx = tx.clone();
         
         let handle = thread::spawn(move || {
-            // We try to connect to port 135 (RPC) or 445 (SMB) as a quick "is alive" check for Windows networks
-            // Alternatively, we can just shell out to ping, but that's slow. 
-            // Let's stick to the "Ping" method for reliability if that's what you used before, 
-            // or a timeout connection test.
-            
-            // Fast method: Ping with 100ms timeout
             let output = Command::new("ping")
                 .args(&["-n", "1", "-w", "100", &ip])
                 .output();
@@ -80,30 +70,27 @@ fn subnet_scanner() {
         handles.push(handle);
     }
 
-    // Close the original sender so the receiver doesn't block forever
     drop(tx);
 
-    // Wait for results
     let mut active_ips = Vec::new();
     for ip in rx {
         println!("    [+] Found Active Host: {}", ip.green());
         active_ips.push(ip);
     }
 
-    // Wait for all threads to finish
     for h in handles {
         let _ = h.join();
     }
 
     if active_ips.is_empty() {
-        println!("{}", "    [!] No active hosts found (or ICMP blocked).".red());
+        println!("{}", "    [!] No active hosts found.".red());
     } else {
         logger::log_data("Subnet_Scan", &format!("Active IPs on {}.x:\n{:?}", prefix, active_ips));
     }
     pause();
 }
 
-// --- 2. NETWORK NUKE (RESTORED) ---
+// --- 2. NETWORK NUKE ---
 fn network_nuke() {
     println!("{}", "\n[*] INITIATING NETWORK NUKE...".red().bold());
     println!("    (Resets Winsock, IP Stack, and flushes DNS)");
@@ -126,7 +113,7 @@ fn network_nuke() {
     pause();
 }
 
-// --- 3. CONNECTIVITY TEST (RESTORED) ---
+// --- 3. CONNECTIVITY TEST ---
 fn connectivity_test() {
     println!("{}", "\n[*] RUNNING CONNECTIVITY TEST...".cyan());
     
@@ -145,23 +132,20 @@ fn connectivity_test() {
     pause();
 }
 
-// --- 4. SAVE IP CONFIG (RESTORED) ---
+// --- 4. SAVE IP CONFIG ---
 fn save_ip_log() {
     println!("{}", "\n[*] SAVING IP CONFIGURATION...".cyan());
     
     let output = Command::new("ipconfig").arg("/all").output().expect("Failed to run ipconfig");
     let content = String::from_utf8_lossy(&output.stdout).to_string();
     
-    // Print to screen preview
     println!("{}", &content);
-
-    // Save to log
     logger::log_data("IP_Configuration", &content);
     println!("{}", "\n[+] Configuration saved to Lazarus_Reports folder.".green());
     pause();
 }
 
-// --- 5. SNMP LOOKUP (NEW) ---
+// --- 5. SNMP LOOKUP (FIXED) ---
 fn snmp_lookup() {
     println!("{}", "\n[*] SNMP OID LOOKUP TOOL".cyan());
     
@@ -195,7 +179,8 @@ fn snmp_lookup() {
         Ok(mut session) => {
             match session.get(&oid) {
                 Ok(response) => {
-                    if let Some((_oid, val)) = response.varbinds.iter().next() {
+                    // FIX: Removed .iter(), just use .next() directly
+                    if let Some((_oid, val)) = response.varbinds.next() {
                         println!("{}", "\n[SUCCESS] Response Received:".green().bold());
                         match val {
                             Value::OctetString(bytes) => {
