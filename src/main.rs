@@ -9,10 +9,14 @@ mod domain;
 mod sharepoint;
 mod update;
 
-const VERSION: &str = "3.0.0"; 
+const VERSION: &str = "3.0.1"; 
 
 fn main() {
+    // --- FIX: FORCE WINDOWS TO READ COLORS ---
+    let _ = enable_ansi_support::enable_ansi_support();
+
     loop {
+        // Clear Screen
         print!("\x1B[2J\x1B[1;1H");
 
         println!("{}", "=========================================".green().bold());
