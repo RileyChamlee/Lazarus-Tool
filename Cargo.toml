@@ -1,6 +1,6 @@
 [package]
 name = "lazarus"
-version = "3.0.1"
+version = "3.0.2"
 edition = "2021"
 
 [dependencies]
@@ -13,10 +13,10 @@ winreg = "0.10"
 ureq = "2.6"
 serde_json = "1.0"
 snmp = "0.2"
-sha2 = "0.10"     # Required for Duplicate Destroyer
-hex = "0.4"       # Required for Duplicate Destroyer
-regex = "1.10"    # Required for BSOD Analyzer & PII Hunter
-enable-ansi-support = "0.2" # <--- THE FIX
+sha2 = "0.10"     # For Duplicate Destroyer
+hex = "0.4"       # For Duplicate Destroyer
+regex = "1.10"    # For BSOD Analyzer
+enable-ansi-support = "0.2" # For Color Fix
 
 [dependencies.windows]
 version = "0.48"
@@ -24,6 +24,9 @@ features = [
     "Win32_Foundation",
     "Win32_System_RestartManager",
     "Win32_System_StationsAndDesktops",
+    "Win32_System_Services", # <--- NEW: For Hung Service Assassin
+    "Win32_Security",        # <--- NEW: For ACL checks
+    "Win32_System_Threading",# <--- NEW: For Process Killing
 ]
 
 [build-dependencies]

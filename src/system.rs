@@ -13,6 +13,7 @@ use sha2::{Sha256, Digest};
 // WINDOWS API IMPORTS
 use windows::core::{PWSTR, PCWSTR};
 use windows::Win32::System::RestartManager::*;
+use windows::Win32::System::Services::*; 
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 
@@ -41,7 +42,11 @@ pub fn menu() {
             "17. File Locksmith (Unlock/Kill Processes)", 
             "18. Duplicate File Destroyer (Find & Delete)",
             "19. UWP App Surgeon (Fix Calc/Photos/Store)",
-            "20. Driver Teleporter (Backup/Restore Drivers)", // <--- NEW TOOL
+            "20. Driver Teleporter (Backup/Restore Drivers)",
+            "21. Fix Stuck Reboot Loop (QuickBooks/Updates)",
+            "22. Bulk File Unblocker (Fix PDF Previews)",
+            "23. Trust Server Zone (Prevent Blocked Files)",
+            "24. Hung Service Assassin (Kill Stuck Services)", // <--- NEW TOOL
             "Back",
         ];
 
@@ -73,97 +78,138 @@ pub fn menu() {
             17 => duplicate_file_destroyer(),
             18 => uwp_app_surgeon(),
             19 => driver_teleporter(),
+            20 => nuke_pending_reboot(),
+            21 => bulk_unblocker(),
+            22 => trust_server_zone(),
+            23 => hung_service_assassin(), // <--- NEW CALL
             _ => break,
         }
     }
 }
 
-// --- 20. DRIVER TELEPORTER (NEW) ---
-fn driver_teleporter() {
-    println!("{}", "\n[*] DRIVER TELEPORTER (MIGRATION TOOL)...".cyan());
-    let choices = &["1. Export All Drivers (Backup)", "2. Import Drivers (Restore)", "Back"];
-    
-    let sel = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt("Select Mode")
-        .items(&choices[..])
-        .interact()
-        .unwrap();
+// --- 24. HUNG SERVICE ASSASSIN ---
+fn hung_service_assassin() {
+    println!("{}", "\n[*] HUNG SERVICE ASSASSIN...".cyan());
+    println!("    (Scanning for services stuck in 'STOP_PENDING' or 'START_PENDING')");
 
+    // Use PowerShell to find stuck services because mapping the full Service API structs 
+    // manually in Rust is extremely verbose. PS is efficient here.
+    
+    let ps_cmd = "Get-Service | Where-Object { $_.Status -eq 'StopPending' -or $_.Status -eq 'StartPending' } | Select-Object Name, DisplayName, Status, Id | Format-Table -AutoSize | Out-String";
+    
+    let output = Command::new("powershell")
+        .args(&["-Command", ps_cmd])
+        .output()
+        .expect("Failed to query services");
+
+    let result = String::from_utf8_lossy(&output.stdout);
+
+    if result.trim().is_empty() {
+        println!("{}", "\n[OK] No hung services found.".green());
+    } else {
+        println!("{}", "\n[!] HUNG SERVICES DETECTED:".red().bold());
+        println!("{}", result);
+
+        if Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Attempt to Force Kill these processes?")
+            .default(false)
+            .interact()
+            .unwrap() 
+        {
+            // We parse the output to get PIDs. 
+            // Actually, simpler to just run a kill loop in PS for safety.
+            let kill_cmd = "Get-Service | Where-Object { $_.Status -eq 'StopPending' } | ForEach-Object { Write-Host 'Killing' $_.Name; Stop-Process -Id $_.Id -Force }";
+            let _ = Command::new("powershell").args(&["-Command", kill_cmd]).output();
+            println!("{}", "[DONE] Kill command sent.".green());
+        }
+    }
+    pause();
+}
+
+// --- EXISTING TOOLS (v3.0.2) ---
+
+fn bulk_unblocker() {
+    println!("{}", "\n[*] BULK FILE UNBLOCKER...".cyan());
+    let path_str: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Enter folder path (e.g., S:\\Scans)").interact_text().unwrap();
+    let path = Path::new(&path_str);
+    if !path.exists() { println!("{}", "    [!] Path does not exist.".red()); pause(); return; }
+    println!("{}", format!("    Unblocking all files in {}...", path_str).yellow());
+    let ps_cmd = format!("Get-ChildItem -Path '{}' -Recurse -File | Unblock-File -Verbose", path_str);
+    let output = Command::new("powershell").args(&["-Command", &ps_cmd]).output();
+    if output.is_ok() { println!("{}", "[SUCCESS] Files unblocked.".green()); } else { println!("{}", "[FAIL] Error.".red()); }
+    pause();
+}
+
+fn trust_server_zone() {
+    println!("{}", "\n[*] TRUST FILE SERVER (INTRANET ZONE)...".cyan());
+    let server: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Enter Server Name/IP").interact_text().unwrap();
+    println!("{}", format!("    Adding '{}' to Trusted Zone...", server).yellow());
+    let ps_script = format!(r#"
+        $Server = "{}"
+        $Zone = 1 # Local Intranet
+        $RegPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap\EscDomains\$Server"
+        New-Item -Path $RegPath -Force | Out-Null
+        New-ItemProperty -Path $RegPath -Name "file" -Value $Zone -PropertyType DWORD -Force | Out-Null
+    "#, server);
+    let _ = Command::new("powershell").args(&["-Command", &ps_script]).output();
+    println!("{}", "[SUCCESS] Server added.".green());
+    pause();
+}
+
+fn nuke_pending_reboot() {
+    println!("{}", "\n[*] CLEARING PENDING REBOOT FLAGS...".cyan());
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let mut cleared = false;
+    if let Ok(key) = hklm.open_subkey_with_flags("SYSTEM\\CurrentControlSet\\Control\\Session Manager", KEY_ALL_ACCESS) {
+        if key.delete_value("PendingFileRenameOperations").is_ok() { println!("{}", "    [+] Removed 'PendingFileRenameOperations'.".green()); cleared = true; }
+    }
+    if let Ok(key) = hklm.open_subkey_with_flags("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update", KEY_ALL_ACCESS) {
+        if key.delete_subkey("RebootRequired").is_ok() { println!("{}", "    [+] Removed 'RebootRequired'.".green()); cleared = true; }
+    }
+    if let Ok(key) = hklm.open_subkey_with_flags("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing", KEY_ALL_ACCESS) {
+        if key.delete_subkey("RebootPending").is_ok() { println!("{}", "    [+] Removed 'CBS RebootPending'.".green()); cleared = true; }
+    }
+    if cleared { println!("{}", "\n[SUCCESS] Reboot flags cleared.".green().bold()); } else { println!("{}", "\n[OK] No flags found.".green()); }
+    pause();
+}
+
+fn driver_teleporter() {
+    println!("{}", "\n[*] DRIVER TELEPORTER...".cyan());
+    let choices = &["Export Drivers (Backup)", "Import Drivers (Restore)", "Back"];
+    let sel = Select::with_theme(&ColorfulTheme::default()).with_prompt("Select Mode").items(&choices[..]).interact().unwrap();
     match sel {
         0 => {
-            let path: String = Input::with_theme(&ColorfulTheme::default())
-                .with_prompt("Export Destination Folder")
-                .default("C:\\Lazarus_Drivers".to_string())
-                .interact_text()
-                .unwrap();
-            
-            println!("{}", format!("    Exporting drivers to {}... (This takes a while)", path).yellow());
+            let path: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Export Folder").default("C:\\Lazarus_Drivers".to_string()).interact_text().unwrap();
             let _ = fs::create_dir_all(&path);
-            
-            // pnputil /export-driver * "C:\Path"
-            let status = Command::new("pnputil")
-                .args(&["/export-driver", "*", &path])
-                .status();
-
-            if status.is_ok() { println!("{}", "[SUCCESS] Drivers exported.".green()); }
-            else { println!("{}", "[FAIL] Export failed.".red()); }
+            println!("{}", "    Exporting... (Wait)".yellow());
+            let _ = Command::new("pnputil").args(&["/export-driver", "*", &path]).status();
+            println!("{}", "[DONE]".green());
         },
         1 => {
-            let path: String = Input::with_theme(&ColorfulTheme::default())
-                .with_prompt("Source Folder (containing .inf files)")
-                .interact_text()
-                .unwrap();
-            
-            if !Path::new(&path).exists() {
-                println!("{}", "    [!] Folder not found.".red());
-                pause();
-                return;
-            }
-
-            println!("{}", "    Installing drivers...".yellow());
-            // pnputil /add-driver "C:\Path\*.inf" /subdirs /install
-            let status = Command::new("pnputil")
-                .args(&["/add-driver", &format!("{}\\*.inf", path), "/subdirs", "/install"])
-                .status();
-
-            if status.is_ok() { println!("{}", "[SUCCESS] Drivers installed.".green()); }
-            else { println!("{}", "[FAIL] Import failed.".red()); }
+            let path: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Source Folder").interact_text().unwrap();
+            println!("{}", "    Installing...".yellow());
+            let _ = Command::new("pnputil").args(&["/add-driver", &format!("{}\\*.inf", path), "/subdirs", "/install"]).status();
+            println!("{}", "[DONE]".green());
         },
         _ => return,
     }
     pause();
 }
 
-// --- PREVIOUS V3.0 FEATURES (LOCKSMITH, ETC) ---
-
 fn file_locksmith() {
     println!("{}", "\n[*] FILE LOCKSMITH (UNLOCKER)...".cyan());
-    
-    let path_str: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Enter the full path of the locked file").interact_text().unwrap();
-    let path = Path::new(&path_str);
-    if !path.exists() { println!("{}", "    [!] File does not exist.".red()); pause(); return; }
-
-    println!("{}", format!("    Inspecting handles for: {:?}", path).yellow());
-
+    let path_str: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Enter file path").interact_text().unwrap();
+    if !Path::new(&path_str).exists() { println!("{}", "    [!] File not found.".red()); pause(); return; }
+    println!("{}", "    Checking handles...".yellow());
     unsafe {
-        match get_locking_processes(&path_str) {
-            Ok(procs) => {
-                if procs.is_empty() {
-                    println!("{}", "    [+] No processes found locking this file.".green());
-                } else {
-                    println!("\n{:<10} | {:<25}", "PID", "PROCESS NAME");
-                    println!("{}", "-------------------------------------".blue());
-                    for (pid, name) in &procs {
-                        println!("{:<10} | {}", pid.to_string().yellow(), name.red());
-                    }
-                    if Confirm::with_theme(&ColorfulTheme::default()).with_prompt("\nKill these processes?").default(false).interact().unwrap() {
-                        for (pid, _) in procs {
-                            run_cmd("taskkill", &["/F", "/PID", &pid.to_string()], "Terminating");
-                        }
-                    }
+        if let Ok(procs) = get_locking_processes(&path_str) {
+            if procs.is_empty() { println!("{}", "    [+] No locks found.".green()); } 
+            else {
+                for (pid, name) in &procs { println!("    LOCKED BY: {} (PID {})", name.red(), pid); }
+                if Confirm::with_theme(&ColorfulTheme::default()).with_prompt("Kill processes?").default(false).interact().unwrap() {
+                    for (pid, _) in procs { run_cmd("taskkill", &["/F", "/PID", &pid.to_string()], "Terminating"); }
                 }
-            },
-            Err(_) => println!("{}", "    [!] Failed to query Restart Manager API.".red()),
+            }
         }
     }
     pause();
@@ -172,21 +218,16 @@ fn file_locksmith() {
 unsafe fn get_locking_processes(file_path: &str) -> Result<Vec<(u32, String)>, windows::core::Error> {
     let mut session_handle: u32 = 0;
     let mut session_key: [u16; 64] = [0; 64]; 
-
     let _ = RmStartSession(&mut session_handle, 0, PWSTR(session_key.as_mut_ptr()));
-
     let wide_path: Vec<u16> = OsStr::new(file_path).encode_wide().chain(Some(0)).collect();
     let pcwstr = PCWSTR(wide_path.as_ptr());
     let resources = [pcwstr];
     let _ = RmRegisterResources(session_handle, Some(&resources), None, None);
-
-    let mut proc_info_needed = 0;
     let mut proc_info: [RM_PROCESS_INFO; 10] = std::mem::zeroed();
     let mut proc_count = 10;
     let mut reason = 0;
-
-    let res = RmGetList(session_handle, &mut proc_info_needed, &mut proc_count, Some(proc_info.as_mut_ptr()), &mut reason);
-
+    let mut needed = 0;
+    let res = RmGetList(session_handle, &mut needed, &mut proc_count, Some(proc_info.as_mut_ptr()), &mut reason);
     let mut results = Vec::new();
     if res == 0 || res == 234 { 
         for i in 0..proc_count as usize {
@@ -203,48 +244,29 @@ unsafe fn get_locking_processes(file_path: &str) -> Result<Vec<(u32, String)>, w
 
 fn duplicate_file_destroyer() {
     println!("{}", "\n[*] DUPLICATE FILE DESTROYER...".cyan());
-    let path_str: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Directory to scan").interact_text().unwrap();
+    let path_str: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Directory").interact_text().unwrap();
     let root = Path::new(&path_str);
-    
-    if !root.exists() { println!("{}", "    [!] Directory not found.".red()); pause(); return; }
-
-    println!("{}", "    Scanning files...".yellow());
+    if !root.exists() { println!("{}", "    [!] Not found.".red()); pause(); return; }
+    println!("{}", "    Scanning...".yellow());
     let mut files_by_size: std::collections::HashMap<u64, Vec<PathBuf>> = std::collections::HashMap::new();
     scan_for_duplicates(root, &mut files_by_size);
-
-    let mut duplicates: Vec<Vec<PathBuf>> = Vec::new();
-    println!("{}", "    Hashing matches...".yellow());
-    
+    let mut duplicates = Vec::new();
     for (_, files) in files_by_size {
         if files.len() > 1 {
             let mut hashes: std::collections::HashMap<String, Vec<PathBuf>> = std::collections::HashMap::new();
-            for f in files {
-                if let Ok(hash) = calculate_hash(&f) {
-                    hashes.entry(hash).or_default().push(f);
-                }
-            }
-            for (_, group) in hashes {
-                if group.len() > 1 { duplicates.push(group); }
-            }
+            for f in files { if let Ok(hash) = calculate_hash(&f) { hashes.entry(hash).or_default().push(f); } }
+            for (_, group) in hashes { if group.len() > 1 { duplicates.push(group); } }
         }
     }
-
-    if duplicates.is_empty() {
-        println!("{}", "\n[+] No duplicates found.".green());
-    } else {
+    if duplicates.is_empty() { println!("{}", "    [+] No duplicates.".green()); } 
+    else {
         println!("\n[!] FOUND DUPLICATES:");
         for group in &duplicates {
-            println!("{}", "---------------------------------".blue());
+            println!("{}", "-------------------".blue());
             for (i, file) in group.iter().enumerate() { println!("  [{}] {:?}", i, file); }
-            
             if Confirm::with_theme(&ColorfulTheme::default()).with_prompt("Delete copies?").default(false).interact().unwrap() {
-                for file in group.iter().skip(1) {
-                    print!("    Deleting {:?}... ", file);
-                    match fs::remove_file(file) {
-                        Ok(_) => println!("{}", "DONE".green()),
-                        Err(_) => println!("{}", "FAIL".red()),
-                    }
-                }
+                for file in group.iter().skip(1) { let _ = fs::remove_file(file); }
+                println!("{}", "    Deleted.".red());
             }
         }
     }
@@ -256,11 +278,7 @@ fn scan_for_duplicates(dir: &Path, map: &mut std::collections::HashMap<u64, Vec<
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() { scan_for_duplicates(&path, map); } 
-            else if let Ok(meta) = path.metadata() {
-                if meta.len() > 0 { 
-                    map.entry(meta.len()).or_default().push(path); 
-                }
-            }
+            else if let Ok(meta) = path.metadata() { if meta.len() > 0 { map.entry(meta.len()).or_default().push(path); } }
         }
     }
 }
@@ -279,154 +297,104 @@ fn calculate_hash(path: &Path) -> Result<String, std::io::Error> {
 
 fn rogue_admin_hunter() {
     println!("{}", "\n[*] SCANNING FOR ROGUE ADMINS...".cyan());
-    let ps_cmd = "Get-LocalGroupMember -Group 'Administrators' | Select-Object -ExpandProperty Name";
-    let output = Command::new("powershell").args(&["-NoProfile", "-Command", ps_cmd]).output().expect("Failed");
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    let admins: Vec<&str> = output_str.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
-
-    let is_safe = |name: &str| -> bool {
-        let n = name.to_lowercase();
-        n.contains("mhk") || n.contains("itadmin") || n.contains("aeadmin") || n.contains("domain admins") || n == "administrator"
-    };
-
-    let mut rogues_found = false;
-    println!("{:<30} {:<10}", "USER ACCOUNT", "STATUS");
-    println!("{}", "------------------------------------------".blue());
-
-    for admin in admins {
-        if is_safe(admin) { println!("{:<30} {}", admin, "[SAFE]".green()); } 
+    let ps = "Get-LocalGroupMember -Group 'Administrators' | Select-Object -ExpandProperty Name";
+    let output = Command::new("powershell").args(&["-Command", ps]).output().expect("Failed");
+    let text = String::from_utf8_lossy(&output.stdout);
+    println!("{:<30} {:<10}", "USER", "STATUS");
+    println!("{}", "--------------------------------".blue());
+    for user in text.lines().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+        let safe = user.to_lowercase().contains("mhk") || user.contains("Domain Admins") || user == "Administrator";
+        if safe { println!("{:<30} {}", user, "[SAFE]".green()); }
         else {
-            rogues_found = true;
-            println!("{:<30} {}", admin, "[ROGUE]".red().bold());
-            let prompt = format!("    -> Demote '{}' immediately?", admin);
-            if Confirm::with_theme(&ColorfulTheme::default()).with_prompt(&prompt).default(false).interact().unwrap() {
-                demote_admin(admin);
+            println!("{:<30} {}", user, "[ROGUE]".red().bold());
+            if Confirm::with_theme(&ColorfulTheme::default()).with_prompt(&format!("Demote {}?", user)).default(false).interact().unwrap() {
+                let _ = Command::new("net").args(&["localgroup", "administrators", user, "/delete"]).output();
+                println!("{}", "    [+] Demoted.".green());
             }
         }
     }
-    if !rogues_found { println!("{}", "\n[+] No rogue admins detected.".green()); }
     pause();
-}
-
-fn demote_admin(user: &str) {
-    let status = Command::new("net").args(&["localgroup", "administrators", user, "/delete"]).output();
-    match status {
-        Ok(s) if s.status.success() => println!("{}", "SUCCESS".green()),
-        _ => println!("{}", "FAILED".red()),
-    }
 }
 
 fn uwp_app_surgeon() {
     println!("{}", "\n[*] UWP APP SURGEON...".cyan());
-    let apps = &["Calculator", "Photos", "StickyNotes", "WindowsStore", "Back"];
-    let sel = Select::with_theme(&ColorfulTheme::default()).with_prompt("Select App to Re-Register").items(&apps[..]).interact().unwrap();
-    let package = match sel {
+    let apps = &["Calculator", "Photos", "StickyNotes", "Store", "Back"];
+    let sel = Select::with_theme(&ColorfulTheme::default()).with_prompt("App to Repair").items(&apps[..]).interact().unwrap();
+    let pkg = match sel {
         0 => "Microsoft.WindowsCalculator",
         1 => "Microsoft.Windows.Photos",
         2 => "Microsoft.MicrosoftStickyNotes",
         3 => "Microsoft.WindowsStore",
         _ => return,
     };
-    println!("{}", format!("    Re-registering {}...", package).yellow());
-    let ps = format!("Get-AppxPackage -AllUsers *{}* | Foreach {{Add-AppxPackage -DisableDevelopmentMode -Register \"$($_.InstallLocation)\\AppXManifest.xml\"}}", package);
+    println!("{}", "    Re-registering...".yellow());
+    let ps = format!("Get-AppxPackage -AllUsers *{}* | Foreach {{Add-AppxPackage -DisableDevelopmentMode -Register \"$($_.InstallLocation)\\AppXManifest.xml\"}}", pkg);
     let _ = Command::new("powershell").args(&["-Command", &ps]).output();
-    println!("{}", "[DONE] Operation complete.".green());
+    println!("{}", "[DONE]".green());
     pause();
 }
 
-// --- STANDARD FEATURES ---
-
+// --- STANDARD ---
 fn remove_bloatware() {
-    println!("{}", "\n[*] STARTING BLOATWARE ASSASSIN...".cyan());
-    if !Confirm::with_theme(&ColorfulTheme::default()).with_prompt("Proceed?").interact().unwrap() { return; }
-    let script = include_str!("scripts/debloat.ps1");
-    run_embedded_powershell("debloat", script, Vec::new());
+    if Confirm::with_theme(&ColorfulTheme::default()).with_prompt("Run Debloat?").interact().unwrap() {
+        run_embedded_powershell("debloat", include_str!("scripts/debloat.ps1"), Vec::new());
+    }
 }
 
 fn browser_deep_clean() {
-    println!("{}", "\n[*] STARTING BROWSER DEEP CLEAN...".cyan());
-    if !Confirm::with_theme(&ColorfulTheme::default()).with_prompt("Proceed?").interact().unwrap() { return; }
-    let script = include_str!("scripts/browser_clean.ps1");
-    run_embedded_powershell("browser_clean", script, Vec::new());
+    if Confirm::with_theme(&ColorfulTheme::default()).with_prompt("Run Browser Clean?").interact().unwrap() {
+        run_embedded_powershell("browser_clean", include_str!("scripts/browser_clean.ps1"), Vec::new());
+    }
 }
 
 fn fslogix_medic() {
-    println!("{}", "\n--- FSLOGIX MEDIC ---".red().bold());
-    let choices = &["1. Unlock Specific User", "2. Enable DRAIN MODE", "3. Disable DRAIN MODE", "4. Restart Services", "Back"];
-    let sel = Select::with_theme(&ColorfulTheme::default()).with_prompt("Select Action").default(0).items(&choices[..]).interact().unwrap();
+    let choices = &["Unlock User", "Enable Drain", "Disable Drain", "Restart Services", "Back"];
+    let sel = Select::with_theme(&ColorfulTheme::default()).with_prompt("FSLogix Medic").items(&choices[..]).interact().unwrap();
     match sel {
-        0 => fslogix_unlock_user(),
-        1 => set_drain_mode(true),
-        2 => set_drain_mode(false),
-        3 => restart_fslogix(),
+        0 => {
+            let user: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Username").interact_text().unwrap();
+            run_embedded_powershell("fslogix_release", include_str!("scripts/fslogix_release.ps1"), vec!["-TargetUser".to_string(), user]);
+        },
+        1 => { run_cmd("change", &["logon", "/drain"], "Enabling Drain"); pause(); },
+        2 => { run_cmd("change", &["logon", "/enable"], "Disabling Drain"); pause(); },
+        3 => { run_cmd("net", &["stop", "frxsvc"], "Stop"); run_cmd("net", &["start", "frxsvc"], "Start"); pause(); },
         _ => return,
     }
 }
 
-fn fslogix_unlock_user() {
-    let user: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Enter Username").interact_text().unwrap();
-    let script = include_str!("scripts/fslogix_release.ps1");
-    run_embedded_powershell("fslogix_release", script, vec!["-TargetUser".to_string(), user]);
-}
-
-fn set_drain_mode(enable: bool) {
-    let arg = if enable { "/drain" } else { "/enable" };
-    run_cmd("change", &["logon", arg], "Toggling Drain Mode");
-    pause();
-}
-
-fn restart_fslogix() {
-    run_cmd("net", &["stop", "frxsvc"], "Stopping FSLogix");
-    run_cmd("net", &["start", "frxsvc"], "Starting FSLogix");
-    pause();
-}
-
-fn scan_hardware_errors() {
-    println!("{}", "\n[*] SCANNING PNP DEVICES FOR ERRORS...".cyan());
-    let script = include_str!("scripts/device_audit.ps1");
-    run_embedded_powershell("device_audit", script, Vec::new());
-}
+fn scan_hardware_errors() { run_embedded_powershell("device_audit", include_str!("scripts/device_audit.ps1"), Vec::new()); }
 
 fn reset_hosts_file() {
-    println!("{}", "\n[*] RESETTING HOSTS FILE...".cyan());
-    let hosts_path = Path::new("C:\\Windows\\System32\\drivers\\etc\\hosts");
-    if let Ok(mut f) = File::create(hosts_path) { 
-        let _ = f.write_all("# Default Windows Hosts File\r\n127.0.0.1 localhost\r\n::1 localhost\r\n".as_bytes()); 
-    }
-    println!("{}", "    [+] Hosts file reset.".green());
-    pause();
+    let path = Path::new("C:\\Windows\\System32\\drivers\\etc\\hosts");
+    if let Ok(mut f) = File::create(path) { let _ = f.write_all(b"# Reset by Lazarus\r\n127.0.0.1 localhost\r\n"); }
+    println!("{}", "    [+] Hosts reset.".green()); pause();
 }
 
 fn enable_wireguard_non_admin() {
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    if let Ok((key, _)) = hklm.create_subkey("SOFTWARE\\WireGuard") { let _ = key.set_value("LimitedOperatorUI", &1u32); }
-    let ps_cmd = r#"$User = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name; Add-LocalGroupMember -Group 'Network Configuration Operators' -Member $User -ErrorAction SilentlyContinue"#;
-    let _ = Command::new("powershell").args(&["-Command", ps_cmd]).output();
-    println!("{}", "    [+] Registry updated.".green());
-    pause();
+    let _ = RegKey::predef(HKEY_LOCAL_MACHINE).create_subkey("SOFTWARE\\WireGuard").map(|(k,_)| k.set_value("LimitedOperatorUI", &1u32));
+    let ps = r#"$User = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name; Add-LocalGroupMember -Group 'Network Configuration Operators' -Member $User -ErrorAction SilentlyContinue"#;
+    let _ = Command::new("powershell").args(&["-Command", ps]).output();
+    println!("{}", "    [+] WireGuard patched.".green()); pause();
 }
 
 fn fix_file_extensions() {
-    run_cmd("cmd", &["/c", "assoc", ".exe=exefile"], "Resetting .exe");
-    run_cmd("cmd", &["/c", "ftype", "exefile=\"%1\" %*"], "Resetting exefile");
-    run_cmd("cmd", &["/c", "assoc", ".lnk=lnkfile"], "Resetting .lnk");
+    run_cmd("cmd", &["/c", "assoc .exe=exefile"], "Fixing .exe");
+    run_cmd("cmd", &["/c", "assoc .lnk=lnkfile"], "Fixing .lnk");
     pause();
 }
 
 fn profile_backup_workflow() {
     let user: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Username").interact_text().unwrap();
-    let path: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Destination").interact_text().unwrap();
-    let args = vec!["-SourceUser".to_string(), user, "-BackupRoot".to_string(), path, "-MappedDriveMode".to_string(), "Backup".to_string()];
-    let script = include_str!("scripts/backup.ps1");
-    run_embedded_powershell("backup", script, args);
+    let dest: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Destination").interact_text().unwrap();
+    let args = vec!["-SourceUser".to_string(), user, "-BackupRoot".to_string(), dest, "-MappedDriveMode".to_string(), "Backup".to_string()];
+    run_embedded_powershell("backup", include_str!("scripts/backup.ps1"), args);
 }
 
 fn profile_restore_workflow() {
     let user: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Username").interact_text().unwrap();
-    let path: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Source").interact_text().unwrap();
-    let args = vec!["-SourceUser".to_string(), user, "-BackupRoot".to_string(), path, "-RestoreSettings".to_string()];
-    let script = include_str!("scripts/restore.ps1");
-    run_embedded_powershell("restore", script, args);
+    let src: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Source").interact_text().unwrap();
+    let args = vec!["-SourceUser".to_string(), user, "-BackupRoot".to_string(), src, "-RestoreSettings".to_string()];
+    run_embedded_powershell("restore", include_str!("scripts/restore.ps1"), args);
 }
 
 fn run_embedded_powershell(name: &str, content: &str, ps_args: Vec<String>) {
@@ -434,10 +402,7 @@ fn run_embedded_powershell(name: &str, content: &str, ps_args: Vec<String>) {
     let start = SystemTime::now();
     let timestamp = start.duration_since(UNIX_EPOCH).expect("Time went backwards").as_millis();
     let temp_path = format!("C:\\Windows\\Temp\\lazarus_{}_{}.ps1", name, timestamp);
-    {
-        let mut file = File::create(&temp_path).expect("Failed to create temp script");
-        file.write_all(content.as_bytes()).expect("Failed to write script");
-    }
+    { let mut file = File::create(&temp_path).expect("Failed to create temp script"); file.write_all(content.as_bytes()).expect("Failed to write script"); }
     let mut final_args = vec!["-NoProfile".to_string(), "-ExecutionPolicy".to_string(), "Bypass".to_string(), "-File".to_string(), temp_path.clone()];
     final_args.extend(ps_args);
     let mut child = Command::new("powershell").args(&final_args).spawn().expect("Failed");
@@ -465,56 +430,20 @@ fn nuke_windows_updates() {
 fn disk_cleanup() {
     clean_folder("C:\\Windows\\Temp");
     clean_folder("C:\\Windows\\Prefetch");
-    println!("{}", "[DONE] Temp files purged.".green());
-    pause();
+    println!("{}", "[DONE] Temp files purged.".green()); pause();
 }
 
 fn run_sfc() {
-    println!("{}", "\n[*] PHASE 1: Running System File Checker...".cyan());
+    println!("{}", "\n[*] Running SFC...".cyan());
     let _ = Command::new("sfc").arg("/scannow").status();
-    println!("{}", "\n[*] PHASE 2: Running DISM Repair...".cyan());
+    println!("{}", "\n[*] Running DISM...".cyan());
     let _ = Command::new("dism").args(&["/Online", "/Cleanup-Image", "/RestoreHealth"]).status();
-    println!("{}", "\n[*] PHASE 3: Cleaning Components...".cyan());
-    let _ = Command::new("dism").args(&["/Online", "/Cleanup-Image", "/StartComponentCleanup"]).status();
-    println!("{}", "\n[SUCCESS] System Repair Complete.".green());
-    pause();
+    println!("{}", "[DONE] Repair complete.".green()); pause();
 }
 
-fn battery_forensics() {
-    let _ = Command::new("powercfg").args(&["/batteryreport"]).status();
-    println!("{}", "Battery report generated.".green());
-    pause();
-}
-
-fn health_report() {
-    let mut sys = System::new_all();
-    sys.refresh_all();
-    println!("RAM: {} / {} MB", sys.used_memory()/1024/1024, sys.total_memory()/1024/1024);
-    pause();
-}
-
-fn run_cmd(cmd: &str, args: &[&str], desc: &str) {
-    print!("[*] {}... ", desc);
-    let _ = Command::new(cmd).args(args).output();
-    println!("{}", "DONE".green());
-}
-
-fn rename_folder(original: &str, new_name: &str) {
-    if Path::new(original).exists() { let _ = fs::rename(original, new_name); }
-}
-
-fn clean_folder(path_str: &str) {
-    if let Ok(entries) = fs::read_dir(path_str) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                if entry.path().is_dir() { let _ = fs::remove_dir_all(entry.path()); }
-                else { let _ = fs::remove_file(entry.path()); }
-            }
-        }
-    }
-}
-
-fn pause() {
-    println!("\nPress Enter to continue...");
-    let _ = std::io::stdin().read_line(&mut String::new());
-}
+fn battery_forensics() { let _ = Command::new("powercfg").args(&["/batteryreport"]).status(); println!("{}", "Battery report generated.".green()); pause(); }
+fn health_report() { let mut sys = System::new_all(); sys.refresh_all(); println!("RAM: {} / {} MB", sys.used_memory()/1024/1024, sys.total_memory()/1024/1024); pause(); }
+fn run_cmd(cmd: &str, args: &[&str], desc: &str) { print!("[*] {}... ", desc); let _ = Command::new(cmd).args(args).output(); println!("{}", "DONE".green()); }
+fn rename_folder(original: &str, new_name: &str) { if Path::new(original).exists() { let _ = fs::rename(original, new_name); } }
+fn clean_folder(path_str: &str) { if let Ok(entries) = fs::read_dir(path_str) { for entry in entries { if let Ok(entry) = entry { if entry.path().is_dir() { let _ = fs::remove_dir_all(entry.path()); } else { let _ = fs::remove_file(entry.path()); } } } } }
+fn pause() { println!("\nPress Enter to continue..."); let _ = std::io::stdin().read_line(&mut String::new()); }

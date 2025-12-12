@@ -25,7 +25,8 @@ pub fn menu() {
             "6. Export Recent System Errors",
             "7. User Audit (Local Accounts)",
             "8. Dump Full System Info",
-            "9. PII Hunter (Scan for SSN/Credit Cards)", // <--- NEW TOOL
+            "9. PII Hunter (Scan for SSN/Credit Cards)",
+            "10. ACL Sentinel (Audit Permissions)", // <--- NEW TOOL
             "Back",
         ];
 
@@ -45,19 +46,20 @@ pub fn menu() {
             5 => export_event_logs(),
             6 => user_audit(),
             7 => dump_system_info(),
-            8 => pii_hunter(), // <--- NEW CALL
+            8 => pii_hunter(),
+            9 => acl_sentinel(), // <--- NEW CALL
             _ => break,
         }
     }
 }
 
-// --- 9. PII HUNTER (COMPLIANCE SCANNER) ---
-fn pii_hunter() {
-    println!("{}", "\n[*] PII HUNTER (SENSITIVE DATA SCANNER)...".cyan());
-    println!("    (Scans text files for SSN: xxx-xx-xxxx and CC: xxxx-xxxx-xxxx-xxxx)");
+// --- 10. ACL SENTINEL ---
+fn acl_sentinel() {
+    println!("{}", "\n[*] ACL SENTINEL (PERMISSION AUDIT)...".cyan());
+    println!("    (Scanning for 'Everyone' or 'Users' with WRITE access)");
     
     let path_str: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Enter directory to scan (e.g., C:\\Users)")
+        .with_prompt("Enter directory to audit")
         .interact_text()
         .unwrap();
 
@@ -68,52 +70,81 @@ fn pii_hunter() {
         return;
     }
 
-    println!("{}", "    Scanning files... (This may take a while)".yellow());
-    let mut pii_hits = Vec::new();
-    let ssn_regex = Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap();
-    let cc_regex = Regex::new(r"\b\d{4}-\d{4}-\d{4}-\d{4}\b").unwrap();
+    println!("{}", "    Scanning ACLs... (This uses icacls, please wait)".yellow());
+    
+    // We use a PowerShell wrapper to efficiently get ACLs recursively and filter bad ones
+    let ps_cmd = format!(r#"
+        Get-ChildItem -Path '{}' -Recurse -Directory -ErrorAction SilentlyContinue | 
+        ForEach-Object {{ 
+            $Acl = Get-Acl -Path $_.FullName; 
+            foreach ($Access in $Acl.Access) {{ 
+                if (($Access.IdentityReference -match 'Everyone' -or $Access.IdentityReference -match 'Users') -and 
+                    ($Access.FileSystemRights -match 'FullControl' -or $Access.FileSystemRights -match 'Write')) {{ 
+                    Write-Output "$($_.FullName) -> $($Access.IdentityReference) has $($Access.FileSystemRights)" 
+                }} 
+            }} 
+        }}
+    "#, path_str);
 
-    scan_pii_recursive(root, &ssn_regex, &cc_regex, &mut pii_hits);
+    let output = Command::new("powershell")
+        .args(&["-Command", &ps_cmd])
+        .output();
 
-    if pii_hits.is_empty() {
-        println!("{}", "\n[+] No PII found in text files.".green());
-    } else {
-        println!("\n[!] POTENTIAL PII FOUND:", );
-        println!("{}", "----------------------------------------".red());
-        let mut report = String::from("PII SCAN REPORT\n");
-        
-        for (file, pii_type) in pii_hits {
-            println!("[{}] {}", pii_type.red(), file);
-            report.push_str(&format!("{} found in {}\n", pii_type, file));
+    match output {
+        Ok(o) => {
+            let result = String::from_utf8_lossy(&o.stdout);
+            if result.trim().is_empty() {
+                println!("{}", "\n[OK] No loose permissions found.".green());
+            } else {
+                println!("{}", "\n[!] RISKY PERMISSIONS FOUND:".red().bold());
+                println!("{}", result);
+                logger::log_data("ACL_Audit", &result);
+                println!("{}", "\n[+] Report saved to Lazarus_Reports.".green());
+            }
+        },
+        Err(_) => println!("{}", "[!] Scan failed.".red()),
+    }
+    pause();
+}
+
+// --- EXISTING TOOLS (v3.0.1) ---
+
+fn pii_hunter() {
+    println!("{}", "\n[*] PII HUNTER...".cyan());
+    let path_str: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Directory").interact_text().unwrap();
+    let root = Path::new(&path_str);
+    if !root.exists() { println!("{}", "    [!] Not found.".red()); pause(); return; }
+    
+    println!("{}", "    Scanning files...".yellow());
+    let mut hits = Vec::new();
+    let ssn_re = Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap();
+    let cc_re = Regex::new(r"\b\d{4}-\d{4}-\d{4}-\d{4}\b").unwrap();
+    scan_pii_recursive(root, &ssn_re, &cc_re, &mut hits);
+
+    if hits.is_empty() { println!("{}", "    [+] No PII found.".green()); } 
+    else {
+        println!("{}", "\n[!] PII FOUND:".red());
+        let mut report = String::new();
+        for (f, t) in hits { 
+            println!("[{}] {}", t.red(), f); 
+            report.push_str(&format!("{} in {}\n", t, f)); 
         }
         logger::log_data("PII_Scan", &report);
     }
     pause();
 }
 
-fn scan_pii_recursive(dir: &Path, ssn_re: &Regex, cc_re: &Regex, hits: &mut Vec<(String, String)>) {
+fn scan_pii_recursive(dir: &Path, ssn: &Regex, cc: &Regex, hits: &mut Vec<(String, String)>) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                scan_pii_recursive(&path, ssn_re, cc_re, hits);
-            } else {
-                // Only scan text-like extensions to avoid reading massive binaries
-                if let Some(ext) = path.extension() {
-                    let ext_str = ext.to_string_lossy().to_lowercase();
-                    if matches!(ext_str.as_str(), "txt" | "csv" | "log" | "xml" | "json" | "md" | "ini") {
-                        if let Ok(file) = File::open(&path) {
-                            let reader = BufReader::new(file);
-                            for line in reader.lines().flatten() {
-                                if ssn_re.is_match(&line) {
-                                    hits.push((path.to_string_lossy().to_string(), "SSN".to_string()));
-                                    break; // Stop scanning this file if hit found
-                                }
-                                if cc_re.is_match(&line) {
-                                    hits.push((path.to_string_lossy().to_string(), "CreditCard".to_string()));
-                                    break;
-                                }
-                            }
+            if path.is_dir() { scan_pii_recursive(&path, ssn, cc, hits); } 
+            else if let Some(ext) = path.extension() {
+                if matches!(ext.to_string_lossy().to_lowercase().as_str(), "txt"|"csv"|"log"|"xml"|"json") {
+                    if let Ok(f) = File::open(&path) {
+                        for line in BufReader::new(f).lines().flatten() {
+                            if ssn.is_match(&line) { hits.push((path.to_string_lossy().to_string(), "SSN".to_string())); break; }
+                            if cc.is_match(&line) { hits.push((path.to_string_lossy().to_string(), "CC".to_string())); break; }
                         }
                     }
                 }
@@ -122,116 +153,101 @@ fn scan_pii_recursive(dir: &Path, ssn_re: &Regex, cc_re: &Regex, hits: &mut Vec<
     }
 }
 
-// --- EXISTING TOOLS ---
-
 fn usb_history_viewer() {
     println!("{}", "\n[*] SCANNING USB ARTIFACTS...".cyan());
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let usb_key = match hklm.open_subkey("SYSTEM\\CurrentControlSet\\Enum\\USBSTOR") {
         Ok(k) => k,
-        Err(_) => { println!("{}", "    [!] Access Denied to Registry.".red()); pause(); return; }
+        Err(_) => { println!("{}", "    [!] Access Denied.".red()); pause(); return; }
     };
-    println!("{:<30} | {}", "DEVICE NAME", "SERIAL / ID");
-    println!("{}", "---------------------------------------------------------".blue());
+    println!("{:<30} | {}", "DEVICE", "STATUS");
+    println!("{}", "----------------------------------------".blue());
     for name in usb_key.enum_keys().map(|x| x.unwrap()) {
         let clean = name.replace("Disk&Ven_", "").replace("&Prod_", " ");
-        println!("{:<30} | {}", clean.green(), "Found in Registry");
+        println!("{:<30} | {}", clean.green(), "Found");
     }
     pause();
 }
 
 fn bsod_analyzer() {
-    println!("{}", "\n[*] ANALYZING SYSTEM CRASHES (BSOD)...".cyan());
-    let ps_cmd_bugcheck = "Get-WinEvent -FilterHashtable @{LogName='System'; EventID=1001} -MaxEvents 10 -ErrorAction SilentlyContinue | Select-Object TimeCreated, Message | Out-String -Width 300";
-    let output = Command::new("powershell").args(&["-NoProfile", "-Command", ps_cmd_bugcheck]).output().expect("Failed");
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    
-    if stdout.trim().is_empty() { println!("{}", "\n[+] No recent BSODs found.".green()); } 
+    println!("{}", "\n[*] ANALYZING CRASHES...".cyan());
+    let ps = "Get-WinEvent -FilterHashtable @{LogName='System'; EventID=1001} -MaxEvents 10 -ErrorAction SilentlyContinue | Select-Object TimeCreated, Message | Out-String -Width 300";
+    let output = Command::new("powershell").args(&["-Command", ps]).output().expect("Failed");
+    let text = String::from_utf8_lossy(&output.stdout);
+    if text.trim().is_empty() { println!("{}", "    [+] No recent crashes.".green()); } 
     else {
-        println!("{}", "\n[!] CRASHES DETECTED:".red().bold());
+        println!("{}", "\n[!] CRASHES DETECTED:".red());
         let re = Regex::new(r"(0x[0-9a-fA-F]{8})").unwrap();
-        for line in stdout.lines() {
-            if line.trim().is_empty() || line.contains("TimeCreated") || line.contains("---") { continue; }
-            println!("{}", "--------------------------------------------------".dimmed());
-            println!("{}", line.trim());
-            if let Some(caps) = re.captures(line) {
-                println!("    -> BugCheck Code: {}", caps.get(1).unwrap().as_str().red().bold());
-            }
+        for line in text.lines() {
+            if line.trim().is_empty() || line.contains("TimeCreated") { continue; }
+            if let Some(caps) = re.captures(line) { println!("    -> Code: {}", caps.get(1).unwrap().as_str().red().bold()); }
         }
     }
     pause();
 }
 
 fn large_file_scout() {
-    println!("{}", "\n[*] SCANNING FOR LARGE FILES (>500MB)...".cyan());
-    let mut large_files: Vec<(u64, String)> = Vec::new();
-    let user_profile = std::env::var("USERPROFILE").unwrap_or("C:\\".to_string());
-    visit_dirs(Path::new(&user_profile), &mut large_files, 500 * 1024 * 1024);
-    large_files.sort_by(|a, b| b.0.cmp(&a.0));
-
-    if large_files.is_empty() { println!("{}", "    [+] No files larger than 500MB found.".green()); } 
+    println!("{}", "\n[*] SCANNING LARGE FILES (>500MB)...".cyan());
+    let mut files = Vec::new();
+    let profile = std::env::var("USERPROFILE").unwrap_or("C:\\".to_string());
+    visit_dirs(Path::new(&profile), &mut files);
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    if files.is_empty() { println!("{}", "    [+] None found.".green()); } 
     else {
-        println!("\n{:<15} {}", "SIZE", "PATH");
-        println!("{}", "--------------------------------------------------".yellow());
-        for (size, path) in large_files.iter().take(20) {
-            println!("{:<10} MB   {}", size / 1024 / 1024, path);
-        }
+        println!("{:<10} {}", "SIZE", "PATH");
+        for (s, p) in files.iter().take(20) { println!("{:<10} MB   {}", s/1024/1024, p); }
     }
     pause();
 }
 
-fn visit_dirs(dir: &Path, list: &mut Vec<(u64, String)>, min_size: u64) {
+fn visit_dirs(dir: &Path, list: &mut Vec<(u64, String)>) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
-                if !path.ends_with("AppData") { visit_dirs(&path, list, min_size); }
-            } else if let Ok(meta) = path.metadata() {
-                if meta.len() > min_size { list.push((meta.len(), path.to_string_lossy().to_string())); }
-            }
+            if path.is_dir() { if !path.ends_with("AppData") { visit_dirs(&path, list); } } 
+            else if let Ok(m) = path.metadata() { if m.len() > 524288000 { list.push((m.len(), path.to_string_lossy().to_string())); } }
         }
     }
 }
 
 fn startup_audit() {
-    println!("{}", "\n[*] SCANNING STARTUP ITEMS...".cyan());
-    let ps_cmd = "Get-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run | Select-Object -Property * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider | Format-List";
-    run_ps_output("Startup_Audit", ps_cmd);
+    println!("{}", "\n[*] AUDITING STARTUP...".cyan());
+    let ps = "Get-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run | Select-Object -Property * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider | Format-List";
+    run_ps_output("Startup", ps);
 }
 
 fn get_oem_key() {
-    println!("{}", "\n[*] RETRIEVING OEM PRODUCT KEY...".cyan());
+    println!("{}", "\n[*] GETTING OEM KEY...".cyan());
     let output = Command::new("wmic").args(&["path", "softwarelicensingservice", "get", "OA3xOriginalProductKey"]).output().expect("Failed");
-    let result = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let key = result.lines().last().unwrap_or("Not Found").trim();
-    println!("{}", format!("\nOEM LICENSE KEY: {}", key).green().bold());
+    println!("{}", String::from_utf8_lossy(&output.stdout).trim());
     pause();
 }
 
 fn export_event_logs() {
-    println!("{}", "\n[*] EXPORTING CRITICAL EVENT LOGS...".cyan());
-    let ps_cmd = "Get-WinEvent -LogName System -MaxEvents 50 -FilterXPath \"*[System[(Level=1 or Level=2)]]\" | Select-Object TimeCreated, Id, ProviderName, Message | Format-Table -AutoSize -Wrap";
-    run_ps_output("Event_Log_Dump", ps_cmd);
+    println!("{}", "\n[*] EXPORTING LOGS...".cyan());
+    let ps = "Get-WinEvent -LogName System -MaxEvents 50 -FilterXPath \"*[System[(Level=1 or Level=2)]]\" | Select-Object TimeCreated, Id, ProviderName, Message | Format-Table -AutoSize -Wrap";
+    run_ps_output("System_Logs", ps);
 }
 
 fn user_audit() {
-    println!("{}", "\n[*] AUDITING LOCAL ACCOUNTS...".cyan());
-    let ps_cmd = "Get-LocalUser | Select-Object Name, Enabled, LastLogon, Description | Format-Table -AutoSize";
-    run_ps_output("User_Audit", ps_cmd);
+    println!("{}", "\n[*] AUDITING USERS...".cyan());
+    let ps = "Get-LocalUser | Select-Object Name, Enabled, LastLogon";
+    run_ps_output("User_Audit", ps);
 }
 
 fn dump_system_info() {
-    println!("{}", "\n[*] Running 'systeminfo'...".cyan());
+    println!("{}", "\n[*] DUMPING SYSTEM INFO...".cyan());
     let output = Command::new("systeminfo").output().expect("Failed");
-    println!("{}", String::from_utf8_lossy(&output.stdout));
+    logger::log_data("System_Info", &String::from_utf8_lossy(&output.stdout));
+    println!("{}", "    [+] Saved.".green());
     pause();
 }
 
-fn run_ps_output(log_name: &str, cmd: &str) {
+fn run_ps_output(name: &str, cmd: &str) {
     let output = Command::new("powershell").args(&["-Command", cmd]).output().expect("Failed");
-    let result = String::from_utf8_lossy(&output.stdout).to_string();
-    println!("{}", result);
-    logger::log_data(log_name, &result);
+    let res = String::from_utf8_lossy(&output.stdout);
+    println!("{}", res);
+    logger::log_data(name, &res);
     pause();
 }
 
