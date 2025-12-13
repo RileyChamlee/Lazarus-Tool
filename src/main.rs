@@ -10,7 +10,7 @@ mod sharepoint;
 mod update;
 mod favorites; // <--- NEW MODULE
 
-const VERSION: &str = "3.0.2"; 
+const VERSION: &str = "3.0.3"; 
 
 fn main() {
     let _ = enable_ansi_support::enable_ansi_support();
