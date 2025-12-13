@@ -14,7 +14,7 @@ pub fn menu() {
         println!("{}", "--- NETWORK TOOLS ---".cyan().bold());
 
         let choices = &[
-            "1. Subnet Fingerprinter (IP + MAC + Vendor)",
+            "1. Subnet Fingerprinter (IP + Host + Vendor)", // Upgraded
             "2. Wi-Fi Operations (Clone/Import/Export)", 
             "3. Network Nuke (Reset Stack)",
             "4. Connectivity Test (Ping Google/Cloudflare)",
@@ -42,6 +42,175 @@ pub fn menu() {
     }
 }
 
+// --- 1. SUBNET FINGERPRINTER (V3.0.5 UPGRADE) ---
+pub fn subnet_fingerprinter() {
+    println!("{}", "\n[*] STARTING ENHANCED ASSET SCANNER...".cyan());
+    
+    let input: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Enter Subnet (e.g. 192.168.1)")
+        .interact_text()
+        .unwrap();
+
+    // Input Sanitization
+    let parts: Vec<&str> = input.trim().split('.').collect();
+    if parts.len() < 3 { 
+        println!("{}", "    [!] Invalid format.".red()); 
+        pause(); 
+        return; 
+    }
+    let prefix = format!("{}.{}.{}", parts[0], parts[1], parts[2]);
+
+    println!("{}", format!("    Scanning {}.1 - {}.254...", prefix, prefix).yellow());
+    println!("    (Resolving Hostnames & OS... This takes ~20 seconds)");
+
+    let (tx, rx) = mpsc::channel();
+    let mut handles = vec![];
+
+    for i in 1..255 {
+        let ip = format!("{}.{}", prefix, i);
+        let tx = tx.clone();
+        
+        handles.push(thread::spawn(move || {
+            // UPGRADE: Use -a to resolve hostname, -n 1 for single ping, -w 400 for timeout
+            let output = Command::new("ping")
+                .args(&["-a", "-n", "1", "-w", "400", &ip])
+                .output();
+            
+            if let Ok(out) = output {
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                if stdout.contains("TTL=") {
+                    // 1. Get Hostname (New Feature)
+                    let hostname = parse_hostname(&stdout, &ip);
+                    
+                    // 2. Guess OS from TTL (New Feature)
+                    let os = parse_ttl_os(&stdout);
+
+                    // 3. Get MAC & Vendor
+                    let mac = get_mac_address(&ip);
+                    let vendor = lookup_vendor(&mac);
+                    
+                    let _ = tx.send((ip, mac, hostname, vendor, os));
+                }
+            }
+        }));
+        // Throttling to prevent network flood
+        thread::sleep(Duration::from_millis(15));
+    }
+
+    drop(tx);
+
+    let mut devices: Vec<_> = rx.into_iter().collect();
+    // Numeric Sort
+    devices.sort_by(|a, b| {
+        let oct_a = a.0.split('.').last().unwrap_or("0").parse::<u8>().unwrap_or(0);
+        let oct_b = b.0.split('.').last().unwrap_or("0").parse::<u8>().unwrap_or(0);
+        oct_a.cmp(&oct_b)
+    });
+
+    if devices.is_empty() {
+        println!("{}", "    [!] No active hosts found.".red());
+    } else {
+        println!("\n{:<15} | {:<20} | {:<17} | {}", "IP ADDRESS", "HOSTNAME", "MAC ADDRESS", "INFO");
+        println!("{}", "-------------------------------------------------------------------------------".blue());
+        
+        for (ip, mac, host, vendor, os) in &devices {
+            let info = if !vendor.is_empty() { 
+                format!("{} ({})", vendor.cyan(), os.dimmed()) 
+            } else { 
+                format!("{}", os.dimmed()) 
+            };
+            println!("{:<15} | {:<20} | {:<17} | {}", ip.green(), host, mac.dimmed(), info);
+        }
+        
+        let report = devices.iter()
+            .map(|(i,m,h,v,o)| format!("{},{},{},{},{}", i,m,h,v,o))
+            .collect::<Vec<String>>()
+            .join("\n");
+        logger::log_data("Subnet_Scan", &report);
+    }
+    
+    for h in handles { let _ = h.join(); }
+    pause();
+}
+
+// --- NEW HELPER FUNCTIONS FOR SCANNER ---
+fn parse_hostname(output: &str, ip: &str) -> String {
+    // Windows Ping Output: "Pinging DESKTOP-XYZ [192.168.1.50]..."
+    if let Some(line) = output.lines().next() {
+        if let Some(start) = line.find("Pinging ") {
+            if let Some(end) = line.find(" [") {
+                let host = &line[start+8..end];
+                if host != ip { return host.to_string(); }
+            }
+        }
+    }
+    "".to_string()
+}
+
+fn parse_ttl_os(output: &str) -> String {
+    if let Some(pos) = output.find("TTL=") {
+        let rest = &output[pos+4..];
+        let ttl_str = rest.split_whitespace().next().unwrap_or("0");
+        if let Ok(ttl) = ttl_str.parse::<u8>() {
+            return match ttl {
+                128 => "Windows".to_string(),
+                64 => "Linux/Mac".to_string(),
+                255 | 254 => "NetGear".to_string(),
+                _ => format!("TTL={}", ttl),
+            };
+        }
+    }
+    "".to_string()
+}
+
+fn get_mac_address(ip: &str) -> String {
+    let output = Command::new("arp").arg("-a").arg(ip).output();
+    if let Ok(out) = output {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        for line in stdout.lines() {
+            if line.contains(ip) {
+                for part in line.split_whitespace() {
+                    if part.contains('-') && part.len() == 17 { return part.to_string().to_uppercase(); }
+                }
+            }
+        }
+    }
+    "Unknown".to_string()
+}
+
+fn lookup_vendor(mac: &str) -> String {
+    if mac == "Unknown" { return "".to_string(); }
+    let prefix = mac.replace("-", "").replace(":", "");
+    if prefix.len() < 6 { return "".to_string(); }
+    let oui = &prefix[0..6];
+
+    match oui {
+        "00155D" | "0003FF" => "Hyper-V",
+        "005056" | "000C29" | "000569" | "001C14" => "VMware",
+        "080027" => "VirtualBox",
+        "001C42" => "Parallels",
+        // EXPANDED DELL LIST
+        "C46516" | "C86C3D" | "F04DA2" | "B8CA3A" | "001422" | "F8B156" | "14B31F" | "A4BB6D" | "0016D3" | "001C23" => "Dell",
+        // EXPANDED HP LIST
+        "D89D67" | "FC15B4" | "3C5282" | "DCD329" | "5065F3" | "C8D3FF" | "009C02" | "00110A" => "HP",
+        // EXPANDED INTEL LIST
+        "0016E8" | "6C2990" | "D8F883" | "806E6F" | "4CBB58" | "001B21" => "Intel",
+        // APPLE
+        "ACBC32" | "1499E2" | "3C15C2" | "F01898" | "BC926B" | "88E9FE" | "F4F951" | "000393" | "000502" => "Apple",
+        // NETWORKING
+        "00D02D" | "002545" | "F866F2" | "5897BD" | "BC1665" => "Cisco",
+        "E0553D" | "00180A" | "AC17C8" => "Meraki",
+        "F09E63" | "B4FBE4" | "802AA8" | "7483C2" | "E063DA" | "68D79A" => "Ubiquiti",
+        "18B169" | "C025E9" | "2CEA7F" => "SonicWall",
+        "A05272" => "Peplink",
+        "000B86" | "D8C7C8" | "9C1C12" | "204C03" => "Aruba",
+        "E02F6D" | "80CC28" | "9C3DCF" => "Netgear",
+        "B827EB" | "DC1660" | "D83ADD" | "E45F01" => "Raspberry Pi",
+        _ => "",
+    }.to_string()
+}
+
+// --- 2. WI-FI OPERATIONS (RESTORED FULL) ---
 pub fn wifi_menu() {
     loop {
         let choices = &[
@@ -98,152 +267,7 @@ pub fn wifi_import_profiles() {
     pause();
 }
 
-pub fn subnet_fingerprinter() {
-    println!("{}", "\n[*] STARTING ASSET SCANNER...".cyan());
-    
-    let input: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Enter Subnet (e.g. 192.168.1 or 10.0.0.1)")
-        .interact_text()
-        .unwrap();
-
-    // Input Sanitization (Fixes the 10.0.0.1.1 bug)
-    let parts: Vec<&str> = input.trim().split('.').collect();
-    let prefix = if parts.len() == 4 {
-        format!("{}.{}.{}", parts[0], parts[1], parts[2])
-    } else if parts.len() == 3 {
-        input.trim().to_string()
-    } else {
-        println!("{}", "    [!] Invalid IP format. Please use format like 192.168.1".red());
-        pause();
-        return;
-    };
-
-    println!("{}", format!("    Scanning {}.1 - {}.254...", prefix, prefix).yellow());
-    println!("    (Pinging hosts... This may take up to 20 seconds)");
-
-    let (tx, rx) = mpsc::channel();
-    let mut handles = vec![];
-
-    // Thread Throttling enabled
-    for i in 1..255 {
-        let ip = format!("{}.{}", prefix, i);
-        let tx = tx.clone();
-        
-        let handle = thread::spawn(move || {
-            let output = Command::new("ping")
-                .args(&["-n", "1", "-w", "500", &ip])
-                .output();
-                
-            if let Ok(out) = output {
-                if String::from_utf8_lossy(&out.stdout).contains("TTL=") {
-                    let mac = get_mac_address(&ip);
-                    let vendor = lookup_vendor(&mac);
-                    let _ = tx.send((ip, mac, vendor));
-                }
-            }
-        });
-        handles.push(handle);
-        thread::sleep(Duration::from_millis(15)); 
-    }
-
-    drop(tx);
-
-    let mut devices = Vec::new();
-    for device in rx {
-        devices.push(device);
-    }
-
-    // Numeric Sort
-    devices.sort_by(|a, b| {
-        let octet_a = a.0.split('.').last().unwrap_or("0").parse::<u8>().unwrap_or(0);
-        let octet_b = b.0.split('.').last().unwrap_or("0").parse::<u8>().unwrap_or(0);
-        octet_a.cmp(&octet_b)
-    });
-
-    if devices.is_empty() {
-        println!("{}", "    [!] No active hosts found.".red());
-    } else {
-        println!("\n{:<16} | {:<18} | {}", "IP ADDRESS", "MAC ADDRESS", "VENDOR/DEVICE");
-        println!("{}", "-------------------------------------------------------------".blue());
-        
-        for (ip, mac, vendor) in &devices {
-            println!("{:<16} | {:<18} | {}", ip.green(), mac.dimmed(), vendor.cyan());
-        }
-        
-        let report = devices.iter()
-            .map(|(i, m, v)| format!("{} - {} - {}", i, m, v))
-            .collect::<Vec<String>>()
-            .join("\n");
-        logger::log_data("Subnet_Fingerprint", &report);
-    }
-    
-    for h in handles {
-        let _ = h.join();
-    }
-    pause();
-}
-
-fn get_mac_address(ip: &str) -> String {
-    let output = Command::new("arp").arg("-a").arg(ip).output();
-    if let Ok(out) = output {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        for line in stdout.lines() {
-            if line.contains(ip) {
-                for part in line.split_whitespace() {
-                    if part.contains('-') && part.len() == 17 { return part.to_string().to_uppercase(); }
-                }
-            }
-        }
-    }
-    "Unknown".to_string()
-}
-
-fn lookup_vendor(mac: &str) -> String {
-    if mac == "Unknown" { return "".to_string(); }
-    let prefix = mac.replace("-", "").replace(":", "");
-    if prefix.len() < 6 { return "".to_string(); }
-    let oui = &prefix[0..6];
-
-    match oui {
-        "00155D" | "0003FF" => "Microsoft Hyper-V".to_string(),
-        "005056" | "000C29" | "000569" | "001C14" => "VMware".to_string(),
-        "080027" => "VirtualBox".to_string(),
-        "001C42" => "Parallels".to_string(),
-        "F04DA2" | "B8CA3A" | "001422" | "F8B156" | "14B31F" | "A4BB6D" => "Dell".to_string(),
-        "D89D67" | "FC15B4" | "3C5282" | "DCD329" | "5065F3" | "C8D3FF" => "HP / Hewlett Packard".to_string(),
-        "54E1AD" | "482AE3" | "B4A9FC" | "002324" | "6C8814" => "Lenovo".to_string(),
-        "2816A8" | "501AC5" | "989096" => "Microsoft Surface".to_string(),
-        "ACBC32" | "1499E2" | "3C15C2" | "F01898" | "BC926B" | "88E9FE" | "F4F951" => "Apple Device".to_string(),
-        "D8F883" | "806E6F" | "4CBB58" => "Intel Corp".to_string(),
-        "00D861" | "049226" | "D43D7E" => "Micro-Star (MSI)".to_string(),
-        "F4B7E2" | "04D4C4" => "ASUS".to_string(),
-        "00D02D" | "002545" | "F866F2" | "5897BD" | "BC1665" => "Cisco".to_string(),
-        "E0553D" | "00180A" | "AC17C8" => "Cisco Meraki".to_string(),
-        "F09E63" | "B4FBE4" | "802AA8" | "7483C2" | "E063DA" | "68D79A" => "Ubiquiti".to_string(),
-        "18B169" | "C025E9" | "2CEA7F" => "SonicWall".to_string(),
-        "000B86" | "D8C7C8" | "9C1C12" | "204C03" => "Aruba Networks".to_string(),
-        "E02F6D" | "80CC28" | "9C3DCF" => "Netgear".to_string(),
-        "50C7BF" | "704F57" | "18A6F7" | "F4F26D" => "TP-Link".to_string(),
-        "001132" | "00248C" | "9009D0" => "Synology".to_string(),
-        "0090A8" | "000129" => "Zyxel".to_string(),
-        "DC9FDB" | "F07959" => "Fortinet".to_string(),
-        "001565" | "9C93E4" | "0000AA" => "Xerox".to_string(),
-        "30055C" | "008077" | "A402B9" => "Brother".to_string(),
-        "001E8F" | "84BA3B" | "F0038C" => "Canon".to_string(),
-        "00C0EE" | "489EBD" => "Kyocera".to_string(),
-        "002673" | "905BA3" => "Ricoh".to_string(),
-        "AC3FA4" | "D83064" => "Zebra Technologies".to_string(),
-        "B827EB" | "DC1660" | "D83ADD" | "E45F01" => "Raspberry Pi".to_string(),
-        "649EF3" | "0004F2" => "Polycom".to_string(),
-        "805EC0" | "001565" => "Yealink".to_string(),
-        "000B82" | "009033" => "Grandstream".to_string(),
-        "00408C" | "ACCC8E" => "Axis Communications".to_string(),
-        "102C6B" | "4437E6" => "Hikvision".to_string(),
-        "2462AB" | "807D3A" => "Espressif (IoT)".to_string(),
-        _ => "".to_string(),
-    }
-}
-
+// --- 3. NETWORK NUKE (RESTORED FULL) ---
 pub fn network_nuke() {
     println!("{}", "\n[!] WARNING: NETWORK NUKE INITIATED [!]".red().bold());
     println!("    This will reset all network adapters, clear DNS, and remove static IPs.");
@@ -292,6 +316,7 @@ pub fn network_nuke() {
     pause();
 }
 
+// --- REMAINING FUNCTIONS (UNCHANGED) ---
 pub fn connectivity_test() {
     println!("{}", "\n[*] RUNNING CONNECTIVITY TEST...".cyan());
     let targets = [("8.8.8.8", "Google DNS"), ("1.1.1.1", "Cloudflare DNS")];

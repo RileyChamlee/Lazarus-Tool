@@ -25,6 +25,7 @@ pub fn menu() {
             "8. Dump Full System Info",
             "9. PII Hunter (Scan for SSN/Credit Cards)",
             "10. ACL Sentinel (Audit Permissions)",
+            "11. Shadow Explorer (Mount VSS to Drive)", // NEW
             "Back",
         ];
 
@@ -46,10 +47,84 @@ pub fn menu() {
             7 => dump_system_info(),
             8 => pii_hunter(),
             9 => acl_sentinel(),
+            10 => shadow_explorer(), // NEW CALL
             _ => break,
         }
     }
 }
+
+// --- 11. SHADOW EXPLORER (LOGGING ADDED) ---
+pub fn shadow_explorer() {
+    println!("{}", "\n[*] SHADOW COPY EXPLORER...".cyan());
+    println!("    (Scanning for restore points...)");
+
+    // 1. List Shadows via vssadmin
+    let output = Command::new("vssadmin").args(&["list", "shadows"]).output().expect("Failed");
+    let text = String::from_utf8_lossy(&output.stdout);
+
+    // 2. Parse paths
+    let mut shadows = Vec::new();
+    let lines: Vec<&str> = text.lines().collect();
+    
+    for line in lines {
+        if line.contains("Shadow Copy Volume Name:") {
+            if let Some(path) = line.split(": ").nth(1) {
+                shadows.push(path.trim().to_string());
+            }
+        }
+    }
+
+    if shadows.is_empty() {
+        println!("{}", "    [!] No Shadow Copies found.".red());
+        pause();
+        return;
+    }
+
+    println!("{}", "\nSelect a Snapshot to Mount:".yellow());
+    let selection = Select::with_theme(&ColorfulTheme::default())
+        .items(&shadows)
+        .default(0)
+        .interact()
+        .unwrap();
+
+    let target_shadow = &shadows[selection];
+    let mount_point = "C:\\Lazarus_Mount_Point";
+
+    // 3. Mount Logic
+    // Clean up any old mounts
+    let _ = fs::remove_dir(mount_point);
+    let _ = fs::create_dir_all(mount_point);
+
+    let cmd = format!("mklink /d \"{}\" \"{}\\\"", mount_point, target_shadow);
+    println!("    Mounting...");
+    
+    let status = Command::new("cmd").args(&["/C", &cmd]).output();
+    
+    if status.is_ok() {
+        println!("{}", "[SUCCESS] Shadow Copy Mounted!".green());
+
+        // LOGGING ADDED HERE
+        let log_msg = format!("Mounted VSS Snapshot: {}\nMount Point: {}", target_shadow, mount_point);
+        logger::log_data("VSS_Mount_Log", &log_msg);
+
+        println!("    Path: {}", mount_point.yellow());
+        println!("    Opening Explorer...");
+        
+        let _ = Command::new("explorer").arg(mount_point).spawn();
+        
+        println!("{}", "\n[NOTE] When finished, press ENTER to unmount and cleanup.".yellow().bold());
+        let _ = std::io::stdin().read_line(&mut String::new());
+        
+        // Cleanup
+        let _ = Command::new("cmd").args(&["/C", "rmdir", mount_point]).output();
+        println!("{}", "[DONE] Unmounted.".green());
+    } else {
+        println!("{}", "[FAIL] Could not mount. (Run Lazarus as Admin)".red());
+        pause();
+    }
+}
+
+// --- EXISTING TOOLS (UNCHANGED) ---
 
 pub fn acl_sentinel() {
     println!("{}", "\n[*] ACL SENTINEL (PERMISSION AUDIT)...".cyan());

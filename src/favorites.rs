@@ -39,6 +39,8 @@ fn get_all_tools() -> Vec<(&'static str, &'static str)> {
         ("sys_unblock", "Bulk File Unblocker"),
         ("sys_trust", "Trust Server Zone"),
         ("sys_service", "Hung Service Assassin"),
+        ("sys_guillotine", "Process Guillotine"), // NEW
+        ("sys_regmedic", "Registry Medic"),       // NEW
         // Domain
         ("dom_trust", "Analyze Domain Trust"),
         ("dom_repair", "Repair Domain Trust"),
@@ -51,6 +53,7 @@ fn get_all_tools() -> Vec<(&'static str, &'static str)> {
         ("for_usb", "USB History Viewer"),
         ("for_pii", "PII Hunter"),
         ("for_acl", "ACL Sentinel"),
+        ("for_shadow", "Shadow Explorer (VSS)"), // NEW
         // SharePoint
         ("sp_nuke", "OneDrive Nuclear Reset"),
         ("sp_scan", "SharePoint Pre-Flight"),
@@ -60,10 +63,12 @@ fn get_all_tools() -> Vec<(&'static str, &'static str)> {
 // EXECUTE TOOL
 fn run_tool_by_id(id: &str) {
     match id {
+        // Network
         "net_scan" => net::subnet_fingerprinter(),
         "net_wifi" => net::wifi_menu(),
         "net_nuke" => net::network_nuke(),
         "net_ping" => net::connectivity_test(),
+        // System
         "sys_backup" => system::profile_backup_workflow(),
         "sys_restore" => system::profile_restore_workflow(),
         "sys_fslogix" => system::fslogix_medic(),
@@ -81,16 +86,22 @@ fn run_tool_by_id(id: &str) {
         "sys_unblock" => system::bulk_unblocker(),
         "sys_trust" => system::trust_server_zone(),
         "sys_service" => system::hung_service_assassin(),
+        "sys_guillotine" => system::process_guillotine(), // NEW
+        "sys_regmedic" => system::registry_medic(),       // NEW
+        // Domain
         "dom_trust" => domain::check_trust(),
         "dom_repair" => domain::repair_trust(),
         "dom_gpu" => domain::force_gpupdate(),
         "dom_audit" => domain::audit_gpo(),
         "dom_sync" => domain::force_adsync(),
         "dom_lock" => domain::list_locked_users(),
+        // Forensics
         "for_bsod" => forensics::bsod_analyzer(),
         "for_usb" => forensics::usb_history_viewer(),
         "for_pii" => forensics::pii_hunter(),
         "for_acl" => forensics::acl_sentinel(),
+        "for_shadow" => forensics::shadow_explorer(),     // NEW
+        // SharePoint
         "sp_nuke" => sharepoint::onedrive_nuclear_reset(),
         "sp_scan" => sharepoint::preflight_scan(),
         _ => println!("{}", "Tool not linked yet.".red()),
@@ -109,7 +120,12 @@ pub fn menu() {
         choices.push("(-) Remove Favorite".red().to_string());
         choices.push("Back".to_string());
 
-        let selection = Select::with_theme(&ColorfulTheme::default()).with_prompt("Select Tool").default(0).items(&choices).interact().unwrap();
+        let selection = Select::with_theme(&ColorfulTheme::default())
+            .with_prompt("Select Tool")
+            .default(0)
+            .items(&choices)
+            .interact()
+            .unwrap();
 
         if selection < favorites.len() {
             run_tool_by_id(&favorites[selection].id);
@@ -129,7 +145,7 @@ fn add_favorite_workflow(current_favs: &mut Vec<FavoriteTool>) {
     
     let choices: Vec<&str> = available.iter().map(|(_, name)| *name).collect();
     
-    // UPDATED PROMPT: Now tells user to press SPACE
+    // Explicit Prompt for Spacebar
     let sels = MultiSelect::with_theme(&ColorfulTheme::default())
         .with_prompt("Select tools to ADD (Press SPACE to Select, ENTER to Confirm)")
         .items(&choices)
@@ -175,7 +191,6 @@ fn load_favorites() -> Vec<FavoriteTool> {
 }
 
 fn save_favorites(favs: &Vec<FavoriteTool>) {
-    // ADDED ERROR HANDLING
     if let Ok(data) = serde_json::to_string_pretty(favs) { 
         if let Err(e) = fs::write(FAVORITES_FILE, data) {
             println!("{} {}", "[!] Failed to save favorites file:".red(), e);

@@ -5,12 +5,10 @@ use std::process::Command;
 use std::path::{Path, PathBuf};
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use sysinfo::{System, SystemExt};
+use sysinfo::{System, SystemExt, ProcessExt}; 
 use winreg::enums::*;
 use winreg::RegKey;
 use sha2::{Sha256, Digest}; 
-
-// WINDOWS API IMPORTS
 use windows::core::{PWSTR, PCWSTR};
 use windows::Win32::System::RestartManager::*;
 use windows::Win32::System::Services::*; 
@@ -47,6 +45,8 @@ pub fn menu() {
             "22. Bulk File Unblocker (Fix PDF Previews)",
             "23. Trust Server Zone (Prevent Blocked Files)",
             "24. Hung Service Assassin (Kill Stuck Services)",
+            "25. Process Guillotine (Emergency Kill-All)", 
+            "26. Registry Medic (Fix TaskMgr/CMD Hijacks)", 
             "Back",
         ];
 
@@ -82,9 +82,104 @@ pub fn menu() {
             21 => bulk_unblocker(),
             22 => trust_server_zone(),
             23 => hung_service_assassin(),
+            24 => process_guillotine(), 
+            25 => registry_medic(),     
             _ => break,
         }
     }
+}
+
+// --- 25. PROCESS GUILLOTINE (LOGGING ADDED) ---
+pub fn process_guillotine() {
+    println!("{}", "\n[!] PROCESS GUILLOTINE INITIATED [!]".red().bold());
+    println!("    This will terminate ALL non-essential applications.");
+    
+    if !Confirm::with_theme(&ColorfulTheme::default()).with_prompt("EXECUTE?").default(false).interact().unwrap() {
+        return;
+    }
+
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    let me = std::process::id();
+    let whitelist = vec![
+        "svchost.exe", "explorer.exe", "csrss.exe", "winlogon.exe", 
+        "services.exe", "lsass.exe", "smss.exe", "wininit.exe", 
+        "spoolsv.exe", "System", "Registry", "Memory Compression",
+        "lazarus.exe", "cmd.exe", "conhost.exe", "powershell.exe"
+    ];
+
+    let mut killed_count = 0;
+    let mut log_content = String::from("Process Guillotine Report\nKILLED PROCESSES:\n");
+
+    for (pid, process) in sys.processes() {
+        let name = process.name();
+        let is_safe = whitelist.iter().any(|&w| w.eq_ignore_ascii_case(name));
+        let is_me = pid.as_u32() == me;
+
+        if !is_safe && !is_me {
+            if process.kill() {
+                println!("    [KILLED] {} (PID: {})", name.red(), pid);
+                log_content.push_str(&format!("{} (PID: {})\n", name, pid));
+                killed_count += 1;
+            }
+        }
+    }
+
+    logger::log_data("Guillotine_Log", &log_content);
+    println!("\n[DONE] Terminated {} processes. Log saved.", killed_count);
+    
+    if killed_count > 0 {
+        println!("    Refreshing shell...");
+        Command::new("taskkill").args(&["/F", "/IM", "explorer.exe"]).output().ok();
+        Command::new("explorer.exe").spawn().ok();
+    }
+    pause();
+}
+
+// --- 26. REGISTRY MEDIC (LOGGING ADDED) ---
+pub fn registry_medic() {
+    println!("{}", "\n[*] REGISTRY MEDIC (ANTI-MALWARE FIXES)...".cyan());
+    
+    let fixes = vec![
+        ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableTaskMgr"),
+        ("HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableRegistryTools"),
+        ("HKCU\\Software\\Policies\\Microsoft\\Windows\\System", "DisableCMD"),
+        ("HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System", "DisableTaskMgr"),
+    ];
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let mut fixed_count = 0;
+    let mut log_content = String::from("Registry Medic Report\nFIXED HIJACKS:\n");
+
+    for (path, val) in fixes {
+        let root = if path.starts_with("HKCU") { &hkcu } else { &hklm };
+        let subkey_path = path.replace("HKCU\\", "").replace("HKLM\\", "");
+
+        if let Ok((key, _)) = root.open_subkey_with_flags(&subkey_path, KEY_ALL_ACCESS) {
+             if let Ok(u32_val) = key.get_value::<u32, _>(val) {
+                 if u32_val == 1 {
+                     println!("    [!] Found Hijack: {} = 1", val.red());
+                     if key.delete_value(val).is_ok() {
+                         println!("        [+] Fixed (Restriction Removed)".green());
+                         log_content.push_str(&format!("Fixed: {} in {}\n", val, path));
+                         fixed_count += 1;
+                     } else {
+                         println!("        [!] Failed to remove (Permission Denied?)".red());
+                         log_content.push_str(&format!("FAILED: {} in {}\n", val, path));
+                     }
+                 }
+             }
+        }
+    }
+
+    if fixed_count > 0 {
+        logger::log_data("Registry_Medic", &log_content);
+        println!("\n[DONE] Fixed {} restrictions. Log saved.", fixed_count);
+    } else {
+        println!("    [+] No standard registry hijacks found.".green());
+    }
+    pause();
 }
 
 // --- 24. HUNG SERVICE ASSASSIN ---
@@ -558,4 +653,4 @@ fn clean_folder(path_str: &str) {
 fn pause() {
     println!("\nPress Enter to continue...");
     let _ = std::io::stdin().read_line(&mut String::new());
-}   
+}

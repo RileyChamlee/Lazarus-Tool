@@ -5,7 +5,6 @@ use std::env;
 use std::process::Command;
 
 // --- CONFIGURATION ---
-// Ensure these match your repository exactly
 const GITHUB_USER: &str = "RileyChamlee"; 
 const GITHUB_REPO: &str = "Lazarus-Tool"; 
 
@@ -25,8 +24,7 @@ pub fn check_for_updates(current_version: &str) {
         }
     };
 
-    // --- FIX IS HERE ---
-    // Instead of resp.into_json(), we use serde_json to read the stream directly.
+    // Use serde_json to read the stream directly.
     let json: serde_json::Value = match serde_json::from_reader(resp.into_reader()) {
         Ok(j) => j,
         Err(_) => {
@@ -37,6 +35,7 @@ pub fn check_for_updates(current_version: &str) {
     };
 
     // 2. Parse Version Tag (e.g., "v1.0.5")
+    // FIX: Using unwrap_or to prevent crashing if GitHub API changes
     let remote_tag = json["tag_name"].as_str().unwrap_or("v0.0.0");
     let remote_ver = remote_tag.trim_start_matches('v');
 
@@ -62,7 +61,6 @@ pub fn check_for_updates(current_version: &str) {
     if !confirm { return; }
 
     // 4. Find the Asset URL
-    // We look specifically for "lazarus.exe" in the release assets
     if let Some(assets) = json["assets"].as_array() {
         for asset in assets {
             if asset["name"] == "lazarus.exe" {
@@ -127,12 +125,10 @@ fn perform_update(url: &str) {
     println!("{}", "Lazarus will now restart...".cyan());
     
     // 5. Auto-Restart
-    // We spawn the NEW exe
     Command::new(&current_exe)
         .spawn()
         .expect("Failed to restart");
         
-    // Kill the current process so the new one can take over
     std::process::exit(0);
 }
 
