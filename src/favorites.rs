@@ -1,4 +1,4 @@
-use crate::{net, system, forensics, sharepoint};
+use crate::{net, system, forensics, sharepoint, domain}; // Added domain
 use colored::*;
 use dialoguer::{Select, MultiSelect, theme::ColorfulTheme};
 use serde::{Serialize, Deserialize};
@@ -16,10 +16,12 @@ struct FavoriteTool {
 // REGISTER ALL TOOLS HERE
 fn get_all_tools() -> Vec<(&'static str, &'static str)> {
     vec![
+        // Network
         ("net_scan", "Subnet Fingerprinter"),
         ("net_wifi", "Wi-Fi Operations"),
         ("net_nuke", "Network Nuke"),
         ("net_ping", "Connectivity Test"),
+        // System
         ("sys_backup", "User Profile Backup"),
         ("sys_restore", "User Profile Restore"),
         ("sys_fslogix", "FSLogix Medic"),
@@ -37,10 +39,19 @@ fn get_all_tools() -> Vec<(&'static str, &'static str)> {
         ("sys_unblock", "Bulk File Unblocker"),
         ("sys_trust", "Trust Server Zone"),
         ("sys_service", "Hung Service Assassin"),
+        // Domain (THESE WERE MISSING)
+        ("dom_trust", "Analyze Domain Trust"),
+        ("dom_repair", "Repair Domain Trust"),
+        ("dom_gpu", "Force GPUpdate"),
+        ("dom_audit", "Audit Applied GPO"),
+        ("dom_sync", "Force Azure AD Sync"),
+        ("dom_lock", "Find Locked Users"),
+        // Forensics
         ("for_bsod", "BSOD Analyzer Pro"),
         ("for_usb", "USB History Viewer"),
         ("for_pii", "PII Hunter"),
         ("for_acl", "ACL Sentinel"),
+        // SharePoint
         ("sp_nuke", "OneDrive Nuclear Reset"),
         ("sp_scan", "SharePoint Pre-Flight"),
     ]
@@ -70,10 +81,19 @@ fn run_tool_by_id(id: &str) {
         "sys_unblock" => system::bulk_unblocker(),
         "sys_trust" => system::trust_server_zone(),
         "sys_service" => system::hung_service_assassin(),
+        // Domain Tools
+        "dom_trust" => domain::check_trust(),
+        "dom_repair" => domain::repair_trust(),
+        "dom_gpu" => domain::force_gpupdate(),
+        "dom_audit" => domain::audit_gpo(),
+        "dom_sync" => domain::force_adsync(),
+        "dom_lock" => domain::list_locked_users(),
+        // Forensics
         "for_bsod" => forensics::bsod_analyzer(),
         "for_usb" => forensics::usb_history_viewer(),
         "for_pii" => forensics::pii_hunter(),
         "for_acl" => forensics::acl_sentinel(),
+        // SharePoint
         "sp_nuke" => sharepoint::onedrive_nuclear_reset(),
         "sp_scan" => sharepoint::preflight_scan(),
         _ => println!("{}", "Tool not linked yet.".red()),
