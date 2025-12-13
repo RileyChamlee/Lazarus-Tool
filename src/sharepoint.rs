@@ -12,9 +12,9 @@ pub fn menu() {
         println!("{}", "--- SHAREPOINT & ONEDRIVE TOOLS ---".cyan().bold());
 
         let choices = &[
-            "1. SharePoint Pre-Flight Scan (Bad Chars/Length)", // Restored
-            "2. OneDrive Nuclear Reset (Fix Sync Issues)",      // New
-            "3. Clear OneDrive Credentials",                    // New
+            "1. SharePoint Pre-Flight Scan (Bad Chars/Length)", 
+            "2. OneDrive Nuclear Reset (Fix Sync Issues)",      
+            "3. Clear OneDrive Credentials",                    
             "Back",
         ];
 
@@ -34,9 +34,7 @@ pub fn menu() {
     }
 }
 
-// --- NEW TOOLS ---
-
-fn onedrive_nuclear_reset() {
+pub fn onedrive_nuclear_reset() {
     println!("{}", "\n[!] ONEDRIVE NUCLEAR RESET [!]".red().bold());
     println!("    This will Kill OneDrive, Wipe Caches, and Force Re-sync.");
     if !Confirm::with_theme(&ColorfulTheme::default()).with_prompt("Proceed?").interact().unwrap() { return; }
@@ -59,7 +57,7 @@ fn onedrive_nuclear_reset() {
     pause();
 }
 
-fn clear_creds() {
+pub fn clear_creds() {
     println!("{}", "\n[*] CLEARING CREDENTIAL MANAGER (OneDrive)...".cyan());
     let script = "cmdkey /list | Select-String 'OneDrive' -Context 0,1 | ForEach-Object { cmdkey /delete:($_ -replace 'Target: ','') }";
     let _ = Command::new("powershell").args(&["-Command", script]).output();
@@ -67,12 +65,9 @@ fn clear_creds() {
     pause();
 }
 
-// --- RESTORED TOOL ---
-
-fn preflight_scan() {
+pub fn preflight_scan() {
     println!("{}", "\n[*] SHAREPOINT MIGRATION SCANNER...".cyan());
 
-    // 1. Get Source Path
     let path_str: String = Input::with_theme(&ColorfulTheme::default())
         .with_prompt("Enter path to scan (e.g., X:\\Data)")
         .interact_text()
@@ -85,7 +80,6 @@ fn preflight_scan() {
         return;
     }
 
-    // 2. Options
     let auto_rename = Confirm::with_theme(&ColorfulTheme::default())
         .with_prompt("Auto-rename illegal characters? (Replaces # % & with _)")
         .default(false)
@@ -98,12 +92,10 @@ fn preflight_scan() {
     let mut issues = Vec::new();
     let mut scanned_count = 0;
 
-    // Start recursion
     scan_dir(path, &mut issues, &mut scanned_count, auto_rename);
 
     let duration = start.elapsed();
     
-    // 3. Report
     println!("{}", "\n--- SCAN COMPLETE ---".green().bold());
     println!("Files Scanned: {}", scanned_count);
     println!("Time Elapsed:  {:.2?}", duration);
@@ -124,7 +116,6 @@ fn preflight_scan() {
             println!("... (and {} more)", issues.len() - 20);
         }
 
-        // Save full CSV
         logger::log_data("SharePoint_Scan", &report_content);
         println!("{}", "\n[+] Full list saved to Lazarus_Reports folder.".green());
     } else {
@@ -142,12 +133,10 @@ fn scan_dir(dir: &Path, issues: &mut Vec<(String, String)>, count: &mut u64, ren
                 let path_str = path.to_string_lossy().to_string();
                 *count += 1;
 
-                // 1. Check Path Length
                 if path_str.len() > 390 {
                     issues.push(("LENGTH".to_string(), path_str.clone()));
                 }
 
-                // 2. Check Illegal Chars
                 if let Some(filename) = path.file_name() {
                     let fname = filename.to_string_lossy();
                     if fname.contains('#') || fname.contains('%') {
@@ -164,7 +153,6 @@ fn scan_dir(dir: &Path, issues: &mut Vec<(String, String)>, count: &mut u64, ren
                     }
                 }
 
-                // Recurse
                 if path.is_dir() {
                     scan_dir(&path, issues, count, rename);
                 }

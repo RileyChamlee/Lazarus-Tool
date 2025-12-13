@@ -1,6 +1,6 @@
 use crate::logger;
 use colored::*;
-use dialoguer::{Select, Input, theme::ColorfulTheme};
+use dialoguer::{Select, Input, Confirm, theme::ColorfulTheme};
 use std::process::Command;
 use std::time::Duration;
 use std::thread;
@@ -42,8 +42,7 @@ pub fn menu() {
     }
 }
 
-// --- WI-FI OPERATIONS ---
-fn wifi_menu() {
+pub fn wifi_menu() {
     loop {
         let choices = &[
             "1. Show Current Wi-Fi Password (Harvest)",
@@ -61,7 +60,7 @@ fn wifi_menu() {
     }
 }
 
-fn wifi_show_current_password() {
+pub fn wifi_show_current_password() {
     println!("{}", "\n[*] RETRIEVING WI-FI KEYS...".cyan());
     let cmd = "netsh wlan show profile name=* key=clear";
     let output = Command::new("cmd").args(&["/C", cmd]).output().expect("Failed");
@@ -69,7 +68,7 @@ fn wifi_show_current_password() {
     pause();
 }
 
-fn wifi_export_profiles() {
+pub fn wifi_export_profiles() {
     println!("{}", "\n[*] EXPORTING WI-FI PROFILES...".cyan());
     let path: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Export Destination Folder").default("C:\\Lazarus_WiFi_Backup".to_string()).interact_text().unwrap();
     let _ = fs::create_dir_all(&path);
@@ -79,7 +78,7 @@ fn wifi_export_profiles() {
     pause();
 }
 
-fn wifi_import_profiles() {
+pub fn wifi_import_profiles() {
     println!("{}", "\n[*] IMPORTING WI-FI PROFILES...".cyan());
     let path_str: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Source Folder").interact_text().unwrap();
     let path = std::path::Path::new(&path_str);
@@ -99,35 +98,43 @@ fn wifi_import_profiles() {
     pause();
 }
 
-// --- 1. SUBNET FINGERPRINTER (FIXED STABILITY) ---
-fn subnet_fingerprinter() {
+pub fn subnet_fingerprinter() {
     println!("{}", "\n[*] STARTING ASSET SCANNER...".cyan());
     
-    let prefix: String = Input::with_theme(&ColorfulTheme::default())
-        .with_prompt("Enter Subnet Prefix (e.g., 192.168.1)")
+    let input: String = Input::with_theme(&ColorfulTheme::default())
+        .with_prompt("Enter Subnet (e.g. 192.168.1 or 10.0.0.1)")
         .interact_text()
         .unwrap();
 
+    // Input Sanitization (Fixes the 10.0.0.1.1 bug)
+    let parts: Vec<&str> = input.trim().split('.').collect();
+    let prefix = if parts.len() == 4 {
+        format!("{}.{}.{}", parts[0], parts[1], parts[2])
+    } else if parts.len() == 3 {
+        input.trim().to_string()
+    } else {
+        println!("{}", "    [!] Invalid IP format. Please use format like 192.168.1".red());
+        pause();
+        return;
+    };
+
     println!("{}", format!("    Scanning {}.1 - {}.254...", prefix, prefix).yellow());
-    println!("    (Pinging hosts and resolving MAC addresses...)\n");
+    println!("    (Pinging hosts... This may take up to 20 seconds)");
 
     let (tx, rx) = mpsc::channel();
     let mut handles = vec![];
 
-    // Throttle the scan slightly to prevent packet loss
+    // Thread Throttling enabled
     for i in 1..255 {
         let ip = format!("{}.{}", prefix, i);
         let tx = tx.clone();
         
-        // Spawn thread
         let handle = thread::spawn(move || {
-            // INCREASED TIMEOUT: 300ms (was 100ms) to catch slower devices
             let output = Command::new("ping")
-                .args(&["-n", "1", "-w", "300", &ip])
+                .args(&["-n", "1", "-w", "500", &ip])
                 .output();
                 
             if let Ok(out) = output {
-                // If Ping Succeeds (TTL check)
                 if String::from_utf8_lossy(&out.stdout).contains("TTL=") {
                     let mac = get_mac_address(&ip);
                     let vendor = lookup_vendor(&mac);
@@ -136,8 +143,6 @@ fn subnet_fingerprinter() {
             }
         });
         handles.push(handle);
-        
-        // STABILITY FIX: Wait 15ms between launching threads to not choke the NIC
         thread::sleep(Duration::from_millis(15)); 
     }
 
@@ -148,7 +153,7 @@ fn subnet_fingerprinter() {
         devices.push(device);
     }
 
-    // Sort by IP numerically if possible, otherwise string sort
+    // Numeric Sort
     devices.sort_by(|a, b| {
         let octet_a = a.0.split('.').last().unwrap_or("0").parse::<u8>().unwrap_or(0);
         let octet_b = b.0.split('.').last().unwrap_or("0").parse::<u8>().unwrap_or(0);
@@ -158,7 +163,7 @@ fn subnet_fingerprinter() {
     if devices.is_empty() {
         println!("{}", "    [!] No active hosts found.".red());
     } else {
-        println!("{:<16} | {:<18} | {}", "IP ADDRESS", "MAC ADDRESS", "VENDOR/DEVICE");
+        println!("\n{:<16} | {:<18} | {}", "IP ADDRESS", "MAC ADDRESS", "VENDOR/DEVICE");
         println!("{}", "-------------------------------------------------------------".blue());
         
         for (ip, mac, vendor) in &devices {
@@ -184,12 +189,8 @@ fn get_mac_address(ip: &str) -> String {
         let stdout = String::from_utf8_lossy(&out.stdout);
         for line in stdout.lines() {
             if line.contains(ip) {
-                // Look for MAC pattern
                 for part in line.split_whitespace() {
-                    // Windows ARP format is usually xx-xx-xx-xx-xx-xx
-                    if part.contains('-') && part.len() == 17 {
-                        return part.to_string().to_uppercase();
-                    }
+                    if part.contains('-') && part.len() == 17 { return part.to_string().to_uppercase(); }
                 }
             }
         }
@@ -197,7 +198,6 @@ fn get_mac_address(ip: &str) -> String {
     "Unknown".to_string()
 }
 
-// --- VENDOR DB (Top 100) ---
 fn lookup_vendor(mac: &str) -> String {
     if mac == "Unknown" { return "".to_string(); }
     let prefix = mac.replace("-", "").replace(":", "");
@@ -205,13 +205,10 @@ fn lookup_vendor(mac: &str) -> String {
     let oui = &prefix[0..6];
 
     match oui {
-        // Virtualization
         "00155D" | "0003FF" => "Microsoft Hyper-V".to_string(),
         "005056" | "000C29" | "000569" | "001C14" => "VMware".to_string(),
         "080027" => "VirtualBox".to_string(),
         "001C42" => "Parallels".to_string(),
-        
-        // PCs / Laptops
         "F04DA2" | "B8CA3A" | "001422" | "F8B156" | "14B31F" | "A4BB6D" => "Dell".to_string(),
         "D89D67" | "FC15B4" | "3C5282" | "DCD329" | "5065F3" | "C8D3FF" => "HP / Hewlett Packard".to_string(),
         "54E1AD" | "482AE3" | "B4A9FC" | "002324" | "6C8814" => "Lenovo".to_string(),
@@ -220,8 +217,6 @@ fn lookup_vendor(mac: &str) -> String {
         "D8F883" | "806E6F" | "4CBB58" => "Intel Corp".to_string(),
         "00D861" | "049226" | "D43D7E" => "Micro-Star (MSI)".to_string(),
         "F4B7E2" | "04D4C4" => "ASUS".to_string(),
-
-        // Networking
         "00D02D" | "002545" | "F866F2" | "5897BD" | "BC1665" => "Cisco".to_string(),
         "E0553D" | "00180A" | "AC17C8" => "Cisco Meraki".to_string(),
         "F09E63" | "B4FBE4" | "802AA8" | "7483C2" | "E063DA" | "68D79A" => "Ubiquiti".to_string(),
@@ -232,16 +227,12 @@ fn lookup_vendor(mac: &str) -> String {
         "001132" | "00248C" | "9009D0" => "Synology".to_string(),
         "0090A8" | "000129" => "Zyxel".to_string(),
         "DC9FDB" | "F07959" => "Fortinet".to_string(),
-
-        // Printers
         "001565" | "9C93E4" | "0000AA" => "Xerox".to_string(),
         "30055C" | "008077" | "A402B9" => "Brother".to_string(),
         "001E8F" | "84BA3B" | "F0038C" => "Canon".to_string(),
         "00C0EE" | "489EBD" => "Kyocera".to_string(),
         "002673" | "905BA3" => "Ricoh".to_string(),
         "AC3FA4" | "D83064" => "Zebra Technologies".to_string(),
-
-        // IoT / VoIP
         "B827EB" | "DC1660" | "D83ADD" | "E45F01" => "Raspberry Pi".to_string(),
         "649EF3" | "0004F2" => "Polycom".to_string(),
         "805EC0" | "001565" => "Yealink".to_string(),
@@ -249,26 +240,59 @@ fn lookup_vendor(mac: &str) -> String {
         "00408C" | "ACCC8E" => "Axis Communications".to_string(),
         "102C6B" | "4437E6" => "Hikvision".to_string(),
         "2462AB" | "807D3A" => "Espressif (IoT)".to_string(),
-        
         _ => "".to_string(),
     }
 }
 
-// --- 2. NETWORK NUKE ---
-fn network_nuke() {
-    println!("{}", "\n[*] INITIATING NETWORK NUKE...".red().bold());
-    let cmds = ["netsh winsock reset", "netsh int ip reset", "ipconfig /release", "ipconfig /renew", "ipconfig /flushdns"];
+pub fn network_nuke() {
+    println!("{}", "\n[!] WARNING: NETWORK NUKE INITIATED [!]".red().bold());
+    println!("    This will reset all network adapters, clear DNS, and remove static IPs.");
+    println!("    (A backup of your current IP config will be saved first.)");
+    
+    if !Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Are you sure you want to proceed?")
+        .default(false)
+        .interact()
+        .unwrap() 
+    {
+        return;
+    }
+
+    // Backup Phase
+    println!("{}", "\n[*] Backing up current network configuration...".yellow());
+    let backup_cmd = "netsh interface ip show config";
+    let output = Command::new("cmd").args(&["/C", backup_cmd]).output();
+    
+    match output {
+        Ok(o) => {
+            let content = String::from_utf8_lossy(&o.stdout).to_string();
+            logger::log_data("Network_Config_Backup", &content);
+            println!("{}", "    [+] Configuration backed up to Lazarus_Reports.".green());
+        },
+        Err(_) => println!("{}", "    [!] Backup failed (continuing anyway)...".red()),
+    }
+
+    // Nuke Phase
+    println!("{}", "\n[*] Resetting Network Stack...".cyan());
+    let cmds = [
+        "netsh winsock reset", 
+        "netsh int ip reset", 
+        "ipconfig /release", 
+        "ipconfig /renew", 
+        "ipconfig /flushdns"
+    ];
+
     for cmd in cmds {
         print!("    Exec: '{}'... ", cmd);
         let _ = Command::new("cmd").args(&["/C", cmd]).output();
         println!("{}", "DONE".green());
     }
-    println!("{}", "\n[DONE] Network stack reset. You may need to reboot.".green());
+    
+    println!("{}", "\n[DONE] Network stack reset. You MUST reboot for changes to take effect.".green().bold());
     pause();
 }
 
-// --- 3. CONNECTIVITY TEST ---
-fn connectivity_test() {
+pub fn connectivity_test() {
     println!("{}", "\n[*] RUNNING CONNECTIVITY TEST...".cyan());
     let targets = [("8.8.8.8", "Google DNS"), ("1.1.1.1", "Cloudflare DNS")];
     for (ip, name) in targets.iter() {
@@ -283,68 +307,45 @@ fn connectivity_test() {
     pause();
 }
 
-// --- 4. SAVE IP CONFIG ---
-fn save_ip_log() {
+pub fn save_ip_log() {
     println!("{}", "\n[*] SAVING IP CONFIGURATION...".cyan());
     let output = Command::new("ipconfig").arg("/all").output().expect("Failed");
     let content = String::from_utf8_lossy(&output.stdout).to_string();
     println!("{}", &content);
     logger::log_data("IP_Configuration", &content);
-    println!("{}", "\n[+] Configuration saved to Lazarus_Reports folder.".green());
+    println!("{}", "\n[+] Saved.".green());
     pause();
 }
 
-// --- 5. SNMP WALK ---
-fn snmp_walk() {
-    println!("{}", "\n[*] SNMP WALKER (DISCOVERY TOOL)".cyan());
-    
-    let target: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Target IP Address").default("127.0.0.1".to_string()).interact_text().unwrap();
-    let community: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Community String").default("public".to_string()).interact_text().unwrap();
-    let root_oid_str: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Start Walking at OID").default("1.3.6.1.2.1.1".to_string()).interact_text().unwrap();
+pub fn snmp_walk() {
+    println!("{}", "\n[*] SNMP WALKER...".cyan());
+    let target: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Target IP").default("127.0.0.1".to_string()).interact_text().unwrap();
+    let community: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Community").default("public".to_string()).interact_text().unwrap();
+    let root_oid_str: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Start OID").default("1.3.6.1.2.1.1".to_string()).interact_text().unwrap();
     let root_oid: Vec<u32> = root_oid_str.split('.').filter_map(|s| s.parse::<u32>().ok()).collect();
-
-    println!("{}", format!("\n    Scanning {} starting at {}...", target, root_oid_str).yellow());
-    println!("{}", "    (Press Ctrl+C to stop if it goes on forever)\n".dimmed());
-
+    println!("{}", "    Scanning...".yellow());
     let timeout = Duration::from_secs(2);
-    
     match SyncSession::new(&target, community.as_bytes(), Some(timeout), 0) {
         Ok(mut session) => {
             let mut current_oid = root_oid.clone();
             let mut count = 0;
-
             loop {
                 match session.getnext(&current_oid) {
                     Ok(mut response) => {
                         if let Some((next_oid_struct, val)) = response.varbinds.next() {
                             let next_oid_string = next_oid_struct.to_string();
                             if !next_oid_string.starts_with(&root_oid_str) { break; }
-                            
-                            match val {
-                                Value::OctetString(bytes) => {
-                                    let s = String::from_utf8_lossy(bytes);
-                                    if s.chars().any(|c| c.is_control() && !c.is_whitespace()) {
-                                        println!("    {} = [Binary Data]", next_oid_string);
-                                    } else {
-                                        println!("    {} = {}", next_oid_string.green(), s);
-                                    }
-                                },
-                                Value::Integer(i) => println!("    {} = {} (Int)", next_oid_string.green(), i),
-                                _ => println!("    {} = {:?}", next_oid_string.green(), val),
-                            }
+                            println!("    {} = {:?}", next_oid_string.green(), val);
                             current_oid = next_oid_string.split('.').filter_map(|s| s.parse::<u32>().ok()).collect();
                             count += 1;
-                            if count >= 100 { 
-                                println!("{}", "    --- (Limit reached) ---".yellow()); 
-                                break; 
-                            }
+                            if count >= 100 { break; }
                         } else { break; }
                     },
                     Err(_) => break,
                 }
             }
         },
-        Err(_) => println!("{}", "    [!] Could not create SNMP session.".red()),
+        Err(_) => println!("{}", "    [!] SNMP Fail.".red()),
     }
     pause();
 }

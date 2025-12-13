@@ -13,8 +13,8 @@ pub fn menu() {
             "2. Repair Domain Trust (Attempt Fix)",
             "3. Force Group Policy Update (GPUpdate)",
             "4. Audit Applied Policies (GPResult)",
-            "5. Force Azure AD Connect Sync (Delta)", // NEW
-            "6. Find Locked Out Users", // NEW
+            "5. Force Azure AD Connect Sync (Delta)", 
+            "6. Find Locked Out Users", 
             "Back",
         ];
 
@@ -37,9 +37,7 @@ pub fn menu() {
     }
 }
 
-// --- NEW FEATURES ---
-
-fn force_adsync() {
+pub fn force_adsync() {
     println!("{}", "\n[*] TRIGGERING AZURE AD DELTA SYNC...".cyan());
     println!("    (Note: This must be run on the server with AD Connect installed)");
 
@@ -70,10 +68,9 @@ fn force_adsync() {
     pause();
 }
 
-fn list_locked_users() {
+pub fn list_locked_users() {
     println!("{}", "\n[*] SCANNING FOR LOCKED AD ACCOUNTS...".cyan());
 
-    // Requires ActiveDirectory PowerShell module (RSAT)
     let ps_cmd = r#"
     try {
         Import-Module ActiveDirectory -ErrorAction Stop
@@ -101,7 +98,6 @@ fn list_locked_users() {
         logger::log_data("Locked_Users", &stdout);
     }
     if !stderr.contains("FAILED") && !stderr.trim().is_empty() {
-         // PowerShell sometimes puts table headers in stderr stream depending on formatting
          println!("{}", stderr);
     } else if stderr.contains("FAILED") {
         println!("    [!] {}", stderr.trim().red());
@@ -110,11 +106,8 @@ fn list_locked_users() {
     pause();
 }
 
-// --- EXISTING FEATURES ---
-
-fn check_trust() {
+pub fn check_trust() {
     println!("{}", "\n[*] TESTING SECURE CHANNEL...".cyan());
-    // Test-ComputerSecureChannel returns "True" or "False"
     let output = Command::new("powershell")
         .args(&["-Command", "Test-ComputerSecureChannel"])
         .output()
@@ -131,11 +124,10 @@ fn check_trust() {
     pause();
 }
 
-fn repair_trust() {
+pub fn repair_trust() {
     println!("{}", "\n[*] ATTEMPTING TRUST REPAIR...".yellow());
     println!("    (This attempts to reset the machine account password with the DC)");
 
-    // We run with -Repair. Note: If the trust is totally gone, this might require domain admin creds.
     let output = Command::new("powershell")
         .args(&["-Command", "Test-ComputerSecureChannel -Repair -Verbose"])
         .output()
@@ -154,10 +146,9 @@ fn repair_trust() {
     pause();
 }
 
-fn force_gpupdate() {
+pub fn force_gpupdate() {
     println!("{}", "\n[*] FORCING GROUP POLICY UPDATE...".cyan());
     
-    // We spawn it so the user sees the standard Windows output lines
     let mut child = Command::new("gpupdate")
         .arg("/force")
         .spawn()
@@ -169,7 +160,7 @@ fn force_gpupdate() {
     pause();
 }
 
-fn audit_gpo() {
+pub fn audit_gpo() {
     println!("{}", "\n[*] GATHERING GROUP POLICY RESULTS...".cyan());
     println!("    (This grabs the Resultant Set of Policy for the current user/computer)");
 

@@ -8,15 +8,14 @@ mod logger;
 mod domain;
 mod sharepoint;
 mod update;
+mod favorites; // <--- NEW MODULE
 
 const VERSION: &str = "3.0.2"; 
 
 fn main() {
-    // --- FIX: FORCE WINDOWS TO READ COLORS ---
     let _ = enable_ansi_support::enable_ansi_support();
 
     loop {
-        // Clear Screen
         print!("\x1B[2J\x1B[1;1H");
 
         println!("{}", "=========================================".green().bold());
@@ -26,6 +25,7 @@ fn main() {
         println!();
 
         let choices = &[
+            "0. ⭐ Favorites (Quick Access)", // <--- NEW OPTION
             "1. Network Tools (Reset, WiFi, Ping Test)",
             "2. System Repair (Updates, Sage, FSLogix)",
             "3. Domain & Identity (Trust, GPO)",
@@ -43,12 +43,13 @@ fn main() {
             .unwrap();
 
         match selection {
-            0 => net::menu(),
-            1 => system::menu(),
-            2 => domain::menu(),
-            3 => forensics::menu(),
-            4 => sharepoint::menu(),
-            5 => update::check_for_updates(VERSION),
+            0 => favorites::menu(),
+            1 => net::menu(),
+            2 => system::menu(),
+            3 => domain::menu(),
+            4 => forensics::menu(),
+            5 => sharepoint::menu(),
+            6 => update::check_for_updates(VERSION),
             _ => {
                 println!("{}", "Exiting Lazarus...".red());
                 break;

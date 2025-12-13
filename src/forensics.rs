@@ -3,13 +3,11 @@ use colored::*;
 use dialoguer::{Select, Input, theme::ColorfulTheme};
 use std::process::Command;
 use std::fs::{self, File};
-use std::io::{Write, BufReader, BufRead};
+use std::io::{BufReader, BufRead};
 use std::path::Path;
 use winreg::enums::*;
 use winreg::RegKey;
 use regex::Regex;
-use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub fn menu() {
     loop {
@@ -26,7 +24,7 @@ pub fn menu() {
             "7. User Audit (Local Accounts)",
             "8. Dump Full System Info",
             "9. PII Hunter (Scan for SSN/Credit Cards)",
-            "10. ACL Sentinel (Audit Permissions)", // <--- NEW TOOL
+            "10. ACL Sentinel (Audit Permissions)",
             "Back",
         ];
 
@@ -47,14 +45,13 @@ pub fn menu() {
             6 => user_audit(),
             7 => dump_system_info(),
             8 => pii_hunter(),
-            9 => acl_sentinel(), // <--- NEW CALL
+            9 => acl_sentinel(),
             _ => break,
         }
     }
 }
 
-// --- 10. ACL SENTINEL ---
-fn acl_sentinel() {
+pub fn acl_sentinel() {
     println!("{}", "\n[*] ACL SENTINEL (PERMISSION AUDIT)...".cyan());
     println!("    (Scanning for 'Everyone' or 'Users' with WRITE access)");
     
@@ -72,7 +69,6 @@ fn acl_sentinel() {
 
     println!("{}", "    Scanning ACLs... (This uses icacls, please wait)".yellow());
     
-    // We use a PowerShell wrapper to efficiently get ACLs recursively and filter bad ones
     let ps_cmd = format!(r#"
         Get-ChildItem -Path '{}' -Recurse -Directory -ErrorAction SilentlyContinue | 
         ForEach-Object {{ 
@@ -107,9 +103,7 @@ fn acl_sentinel() {
     pause();
 }
 
-// --- EXISTING TOOLS (v3.0.1) ---
-
-fn pii_hunter() {
+pub fn pii_hunter() {
     println!("{}", "\n[*] PII HUNTER...".cyan());
     let path_str: String = Input::with_theme(&ColorfulTheme::default()).with_prompt("Directory").interact_text().unwrap();
     let root = Path::new(&path_str);
@@ -153,7 +147,7 @@ fn scan_pii_recursive(dir: &Path, ssn: &Regex, cc: &Regex, hits: &mut Vec<(Strin
     }
 }
 
-fn usb_history_viewer() {
+pub fn usb_history_viewer() {
     println!("{}", "\n[*] SCANNING USB ARTIFACTS...".cyan());
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
     let usb_key = match hklm.open_subkey("SYSTEM\\CurrentControlSet\\Enum\\USBSTOR") {
@@ -169,7 +163,7 @@ fn usb_history_viewer() {
     pause();
 }
 
-fn bsod_analyzer() {
+pub fn bsod_analyzer() {
     println!("{}", "\n[*] ANALYZING CRASHES...".cyan());
     let ps = "Get-WinEvent -FilterHashtable @{LogName='System'; EventID=1001} -MaxEvents 10 -ErrorAction SilentlyContinue | Select-Object TimeCreated, Message | Out-String -Width 300";
     let output = Command::new("powershell").args(&["-Command", ps]).output().expect("Failed");
@@ -186,7 +180,7 @@ fn bsod_analyzer() {
     pause();
 }
 
-fn large_file_scout() {
+pub fn large_file_scout() {
     println!("{}", "\n[*] SCANNING LARGE FILES (>500MB)...".cyan());
     let mut files = Vec::new();
     let profile = std::env::var("USERPROFILE").unwrap_or("C:\\".to_string());
@@ -210,32 +204,32 @@ fn visit_dirs(dir: &Path, list: &mut Vec<(u64, String)>) {
     }
 }
 
-fn startup_audit() {
+pub fn startup_audit() {
     println!("{}", "\n[*] AUDITING STARTUP...".cyan());
     let ps = "Get-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run | Select-Object -Property * -ExcludeProperty PSPath,PSParentPath,PSChildName,PSDrive,PSProvider | Format-List";
     run_ps_output("Startup", ps);
 }
 
-fn get_oem_key() {
+pub fn get_oem_key() {
     println!("{}", "\n[*] GETTING OEM KEY...".cyan());
     let output = Command::new("wmic").args(&["path", "softwarelicensingservice", "get", "OA3xOriginalProductKey"]).output().expect("Failed");
     println!("{}", String::from_utf8_lossy(&output.stdout).trim());
     pause();
 }
 
-fn export_event_logs() {
+pub fn export_event_logs() {
     println!("{}", "\n[*] EXPORTING LOGS...".cyan());
     let ps = "Get-WinEvent -LogName System -MaxEvents 50 -FilterXPath \"*[System[(Level=1 or Level=2)]]\" | Select-Object TimeCreated, Id, ProviderName, Message | Format-Table -AutoSize -Wrap";
     run_ps_output("System_Logs", ps);
 }
 
-fn user_audit() {
+pub fn user_audit() {
     println!("{}", "\n[*] AUDITING USERS...".cyan());
     let ps = "Get-LocalUser | Select-Object Name, Enabled, LastLogon";
     run_ps_output("User_Audit", ps);
 }
 
-fn dump_system_info() {
+pub fn dump_system_info() {
     println!("{}", "\n[*] DUMPING SYSTEM INFO...".cyan());
     let output = Command::new("systeminfo").output().expect("Failed");
     logger::log_data("System_Info", &String::from_utf8_lossy(&output.stdout));

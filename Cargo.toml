@@ -13,10 +13,11 @@ winreg = "0.10"
 ureq = "2.6"
 serde_json = "1.0"
 snmp = "0.2"
-sha2 = "0.10"     # For Duplicate Destroyer
-hex = "0.4"       # For Duplicate Destroyer
-regex = "1.10"    # For BSOD Analyzer
-enable-ansi-support = "0.2" # For Color Fix
+sha2 = "0.10"
+hex = "0.4"
+regex = "1.10"
+enable-ansi-support = "0.2"
+serde = { version = "1.0", features = ["derive"] } # <--- NEW
 
 [dependencies.windows]
 version = "0.48"
@@ -24,9 +25,9 @@ features = [
     "Win32_Foundation",
     "Win32_System_RestartManager",
     "Win32_System_StationsAndDesktops",
-    "Win32_System_Services", # <--- NEW: For Hung Service Assassin
-    "Win32_Security",        # <--- NEW: For ACL checks
-    "Win32_System_Threading",# <--- NEW: For Process Killing
+    "Win32_System_Services",
+    "Win32_Security",
+    "Win32_System_Threading",
 ]
 
 [build-dependencies]
