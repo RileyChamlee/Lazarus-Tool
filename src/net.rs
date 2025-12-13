@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::thread;
 use std::sync::mpsc;
 use std::fs;
-use snmp::{SyncSession, Value};
+use snmp::SyncSession; // Removed unused 'Value'
 
 pub fn menu() {
     loop {

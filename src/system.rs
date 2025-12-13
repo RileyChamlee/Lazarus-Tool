@@ -5,7 +5,8 @@ use std::process::Command;
 use std::path::{Path, PathBuf};
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use sysinfo::{System, SystemExt, ProcessExt}; 
+// ADDED PidExt here to fix the "no method named as_u32" error
+use sysinfo::{System, SystemExt, ProcessExt, PidExt}; 
 use winreg::enums::*;
 use winreg::RegKey;
 use sha2::{Sha256, Digest}; 
@@ -89,7 +90,7 @@ pub fn menu() {
     }
 }
 
-// --- 25. PROCESS GUILLOTINE (LOGGING ADDED) ---
+// --- 25. PROCESS GUILLOTINE (FIXED) ---
 pub fn process_guillotine() {
     println!("{}", "\n[!] PROCESS GUILLOTINE INITIATED [!]".red().bold());
     println!("    This will terminate ALL non-essential applications.");
@@ -114,11 +115,12 @@ pub fn process_guillotine() {
     for (pid, process) in sys.processes() {
         let name = process.name();
         let is_safe = whitelist.iter().any(|&w| w.eq_ignore_ascii_case(name));
+        // Fixed: pid.as_u32() requires PidExt trait which we added to imports
         let is_me = pid.as_u32() == me;
 
         if !is_safe && !is_me {
             if process.kill() {
-                println!("    [KILLED] {} (PID: {})", name.red(), pid);
+                println!("{}", format!("    [KILLED] {} (PID: {})", name, pid).red());
                 log_content.push_str(&format!("{} (PID: {})\n", name, pid));
                 killed_count += 1;
             }
@@ -136,7 +138,7 @@ pub fn process_guillotine() {
     pause();
 }
 
-// --- 26. REGISTRY MEDIC (LOGGING ADDED) ---
+// --- 26. REGISTRY MEDIC (FIXED) ---
 pub fn registry_medic() {
     println!("{}", "\n[*] REGISTRY MEDIC (ANTI-MALWARE FIXES)...".cyan());
     
@@ -156,16 +158,19 @@ pub fn registry_medic() {
         let root = if path.starts_with("HKCU") { &hkcu } else { &hklm };
         let subkey_path = path.replace("HKCU\\", "").replace("HKLM\\", "");
 
-        if let Ok((key, _)) = root.open_subkey_with_flags(&subkey_path, KEY_ALL_ACCESS) {
+        // Fixed: open_subkey_with_flags returns Result<RegKey>, NOT Result<(RegKey, _)>
+        if let Ok(key) = root.open_subkey_with_flags(&subkey_path, KEY_ALL_ACCESS) {
              if let Ok(u32_val) = key.get_value::<u32, _>(val) {
                  if u32_val == 1 {
-                     println!("    [!] Found Hijack: {} = 1", val.red());
+                     println!("{}", format!("    [!] Found Hijack: {} = 1", val).red());
                      if key.delete_value(val).is_ok() {
-                         println!("        [+] Fixed (Restriction Removed)".green());
+                         // Fixed: Added {} placeholder
+                         println!("{}", "        [+] Fixed (Restriction Removed)".green());
                          log_content.push_str(&format!("Fixed: {} in {}\n", val, path));
                          fixed_count += 1;
                      } else {
-                         println!("        [!] Failed to remove (Permission Denied?)".red());
+                         // Fixed: Added {} placeholder
+                         println!("{}", "        [!] Failed to remove (Permission Denied?)".red());
                          log_content.push_str(&format!("FAILED: {} in {}\n", val, path));
                      }
                  }
@@ -177,7 +182,8 @@ pub fn registry_medic() {
         logger::log_data("Registry_Medic", &log_content);
         println!("\n[DONE] Fixed {} restrictions. Log saved.", fixed_count);
     } else {
-        println!("    [+] No standard registry hijacks found.".green());
+        // Fixed: Added {} placeholder
+        println!("{}", "    [+] No standard registry hijacks found.".green());
     }
     pause();
 }
