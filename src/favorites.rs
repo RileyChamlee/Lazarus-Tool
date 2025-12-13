@@ -1,4 +1,4 @@
-use crate::{net, system, forensics, sharepoint, domain}; // Added domain
+use crate::{net, system, forensics, sharepoint, domain};
 use colored::*;
 use dialoguer::{Select, MultiSelect, theme::ColorfulTheme};
 use serde::{Serialize, Deserialize};
@@ -39,7 +39,7 @@ fn get_all_tools() -> Vec<(&'static str, &'static str)> {
         ("sys_unblock", "Bulk File Unblocker"),
         ("sys_trust", "Trust Server Zone"),
         ("sys_service", "Hung Service Assassin"),
-        // Domain (THESE WERE MISSING)
+        // Domain
         ("dom_trust", "Analyze Domain Trust"),
         ("dom_repair", "Repair Domain Trust"),
         ("dom_gpu", "Force GPUpdate"),
@@ -81,19 +81,16 @@ fn run_tool_by_id(id: &str) {
         "sys_unblock" => system::bulk_unblocker(),
         "sys_trust" => system::trust_server_zone(),
         "sys_service" => system::hung_service_assassin(),
-        // Domain Tools
         "dom_trust" => domain::check_trust(),
         "dom_repair" => domain::repair_trust(),
         "dom_gpu" => domain::force_gpupdate(),
         "dom_audit" => domain::audit_gpo(),
         "dom_sync" => domain::force_adsync(),
         "dom_lock" => domain::list_locked_users(),
-        // Forensics
         "for_bsod" => forensics::bsod_analyzer(),
         "for_usb" => forensics::usb_history_viewer(),
         "for_pii" => forensics::pii_hunter(),
         "for_acl" => forensics::acl_sentinel(),
-        // SharePoint
         "sp_nuke" => sharepoint::onedrive_nuclear_reset(),
         "sp_scan" => sharepoint::preflight_scan(),
         _ => println!("{}", "Tool not linked yet.".red()),
@@ -131,7 +128,13 @@ fn add_favorite_workflow(current_favs: &mut Vec<FavoriteTool>) {
     if available.is_empty() { println!("{}", "All tools added!".green()); wait(); return; }
     
     let choices: Vec<&str> = available.iter().map(|(_, name)| *name).collect();
-    let sels = MultiSelect::with_theme(&ColorfulTheme::default()).with_prompt("Select tools to ADD").items(&choices).interact().unwrap();
+    
+    // UPDATED PROMPT: Now tells user to press SPACE
+    let sels = MultiSelect::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select tools to ADD (Press SPACE to Select, ENTER to Confirm)")
+        .items(&choices)
+        .interact()
+        .unwrap();
     
     if !sels.is_empty() {
         for idx in sels {
@@ -146,7 +149,12 @@ fn add_favorite_workflow(current_favs: &mut Vec<FavoriteTool>) {
 fn remove_favorite_workflow(current_favs: &mut Vec<FavoriteTool>) {
     if current_favs.is_empty() { return; }
     let choices: Vec<String> = current_favs.iter().map(|f| f.name.clone()).collect();
-    let sels = MultiSelect::with_theme(&ColorfulTheme::default()).with_prompt("Select tools to REMOVE").items(&choices).interact().unwrap();
+    
+    let sels = MultiSelect::with_theme(&ColorfulTheme::default())
+        .with_prompt("Select tools to REMOVE (Press SPACE to Select)")
+        .items(&choices)
+        .interact()
+        .unwrap();
     
     if !sels.is_empty() {
         let mut indices = sels;
@@ -167,7 +175,12 @@ fn load_favorites() -> Vec<FavoriteTool> {
 }
 
 fn save_favorites(favs: &Vec<FavoriteTool>) {
-    if let Ok(data) = serde_json::to_string_pretty(favs) { let _ = fs::write(FAVORITES_FILE, data); }
+    // ADDED ERROR HANDLING
+    if let Ok(data) = serde_json::to_string_pretty(favs) { 
+        if let Err(e) = fs::write(FAVORITES_FILE, data) {
+            println!("{} {}", "[!] Failed to save favorites file:".red(), e);
+        }
+    }
 }
 
 fn wait() { println!("\nPress Enter..."); let _ = std::io::stdin().read_line(&mut String::new()); }
